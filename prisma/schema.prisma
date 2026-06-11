@@ -1,0 +1,12 @@
+// Prisma schema — placeholder only.
+// Model definitions are added in task-01 (do not define models here).
+// Spec ref: market_intelligence_os_web_app_spec_v2.md §20
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}

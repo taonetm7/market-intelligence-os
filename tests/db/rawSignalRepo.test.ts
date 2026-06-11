@@ -122,6 +122,34 @@ describe("rawSignalRepo CRUD", () => {
     expect(updated.displayId).toBe(created.displayId);
   });
 
+  it("preserves omitted default-bearing fields on update (Codex regression #1)", async () => {
+    // signalTags / extra / origin は入力スキーマで default を持つ。update で省略した際に
+    // partial の default が materialize して既存値を上書きしないことを保証する。
+    const created = await rawSignalRepo.create(
+      inputFixture({
+        signalTags: ["keep-me"],
+        extra: { keep: 1 },
+        origin: "import",
+      }),
+      db,
+    );
+
+    // note だけを更新（default を持つフィールドは一切渡さない）。
+    const updated = await rawSignalRepo.update(created.id, { note: "touched" }, db);
+
+    expect(updated.note).toBe("touched");
+    // 省略したフィールドは default ([] / {} / "manual") に戻らず既存値を保持する。
+    expect(updated.signalTags).toEqual(["keep-me"]);
+    expect(updated.extra).toEqual({ keep: 1 });
+    expect(updated.origin).toBe("import");
+
+    // 再取得しても保持されている（永続化レベルでの確認）。
+    const fetched = await rawSignalRepo.getById(created.id, db);
+    expect(fetched?.signalTags).toEqual(["keep-me"]);
+    expect(fetched?.extra).toEqual({ keep: 1 });
+    expect(fetched?.origin).toBe("import");
+  });
+
   it("deletes a record", async () => {
     const created = await rawSignalRepo.create(inputFixture(), db);
     await rawSignalRepo.delete(created.id, db);
@@ -156,6 +184,27 @@ describe("rawSignalRepo.list filters", () => {
     const result = await rawSignalRepo.list({ unlinkedOnly: true }, db);
     expect(result.map((r) => r.id)).toEqual([unlinked.id]);
     expect(result[0]?.evidenceCount).toBe(0);
+  });
+
+  it("unlinkedOnly excludes non-inbox rows even with zero evidence (Codex regression #2)", async () => {
+    // task doc 定義: unlinkedOnly は「Evidence 0件の inbox」を返す。
+    // archived / ignored は Evidence 0件でも inbox ではないため返してはならない。
+    const inbox = await rawSignalRepo.create(
+      inputFixture({ rawText: "inbox unlinked", status: "inbox" }),
+      db,
+    );
+    await rawSignalRepo.create(
+      inputFixture({ rawText: "archived unlinked", status: "archived" }),
+      db,
+    );
+    await rawSignalRepo.create(
+      inputFixture({ rawText: "ignored unlinked", status: "ignored" }),
+      db,
+    );
+
+    const result = await rawSignalRepo.list({ unlinkedOnly: true }, db);
+    expect(result.map((r) => r.id)).toEqual([inbox.id]);
+    expect(result[0]?.status).toBe("inbox");
   });
 
   it("reports evidenceCount per row", async () => {

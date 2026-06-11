@@ -19,8 +19,9 @@
 // Out of scope: API route（task-11）/ Evidence link 自体の作成（task-10/12）。
 
 import { Prisma, type PrismaClient, type RawSignal } from "@prisma/client";
+import { z } from "zod";
 
-import { sourceTypeSchema, statusSchema } from "../validation/enums";
+import { originSchema, sourceTypeSchema, statusSchema } from "../validation/enums";
 import {
   parseJsonField,
   rawSignalInputSchema,
@@ -61,8 +62,23 @@ export interface RawSignalListFilter {
   q?: string;
 }
 
-/** 更新パッチ。入力スキーマの部分集合（省略フィールドは変更しない）。 */
-export const rawSignalUpdateSchema = rawSignalInputSchema.partial();
+/**
+ * 更新パッチ。入力スキーマの部分集合（省略フィールドは変更しない）。
+ *
+ * 注意: `rawSignalInputSchema.partial()` だけでは不十分。Zod は `.partial()` を
+ * かけても default を持つフィールド（signalTags / extra / origin / status）の
+ * default を、キー省略時に materialize してしまう（例: `parse({ note: "x" })`
+ * → `signalTags: []`, `origin: "manual"` が混入）。これをそのまま update に流すと
+ * 「省略したフィールドが default で上書き」される（Codex 指摘1）。
+ * そこで default を持つ 4 フィールドだけ default 無しの optional に差し替え、
+ * 「省略＝undefined＝変更しない」を構造的に保証する。
+ */
+export const rawSignalUpdateSchema = rawSignalInputSchema.partial().extend({
+  signalTags: z.array(z.string()).optional(),
+  extra: z.record(z.string(), z.unknown()).optional(),
+  origin: originSchema.optional(),
+  status: statusSchema.optional(),
+});
 export type RawSignalUpdate = Partial<RawSignalInput>;
 
 /** Prisma 行をドメイン表現へ復元する（`*Json` → 配列/オブジェクト）。 */
@@ -161,7 +177,7 @@ export async function deleteById(id: string, db: RawSignalDb = prisma): Promise<
 /**
  * 一覧を返す。sourceType / status は Zod 検証してから where に積む。
  * q は contains（LIKE）で rawText / observedEntity / sourceName / note を横断検索。
- * unlinkedOnly は Evidence 0 件のみ（`evidences: { none: {} }`）。
+ * unlinkedOnly は inbox かつ Evidence 0 件のみ（`status: "inbox"` ＋ `evidences: { none: {} }`）。
  * 各行に紐付け候補数（evidenceCount）を付与する。
  */
 export async function list(
@@ -185,6 +201,10 @@ export async function list(
     ];
   }
   if (filter.unlinkedOnly) {
+    // task doc 定義: unlinkedOnly は「Evidence が0件の inbox」を返す（Codex 指摘2）。
+    // Evidence 0件でも archived / ignored は未処理の inbox ではないため除外する。
+    // status を明示的に inbox へ固定する（status フィルタと併用時も inbox が優先）。
+    where.status = "inbox";
     where.evidences = { none: {} };
   }
 

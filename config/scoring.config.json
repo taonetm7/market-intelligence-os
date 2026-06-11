@@ -1,0 +1,44 @@
+{
+  "version": "2026.06-v1",
+  "initialWeights": {
+    "spend": 5,
+    "dissatisfaction": 4,
+    "pain": 3,
+    "frequency": 3,
+    "discoverability": 3,
+    "substitute": 2
+  },
+  "detailedWeights": {
+    "spend": 15,
+    "wtp": 10,
+    "acquisition": 10,
+    "pain": 10,
+    "frequency": 8,
+    "retention": 8,
+    "competitorPain": 8,
+    "differentiation": 8,
+    "formFit": 7,
+    "pfFit": 6,
+    "buildEase": 5,
+    "legalSafety": 5
+  },
+  "signalBonus": {
+    "2": 5,
+    "3": 10,
+    "4plusWithSpend": 15
+  },
+  "gates": {
+    "top100": {
+      "minScore": 58,
+      "minDistinctSources": 2,
+      "maxLegalRisk": 3,
+      "maxOpsRisk": 3
+    },
+    "top30": {
+      "minTotal": 68,
+      "minConfidence": 0.7,
+      "minDistinctSources": 3,
+      "maxTestDays": 7
+    }
+  }
+}

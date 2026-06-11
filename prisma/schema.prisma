@@ -1,6 +1,9 @@
-// Prisma schema — placeholder only.
-// Model definitions are added in task-01 (do not define models here).
-// Spec ref: market_intelligence_os_web_app_spec_v2.md §20
+// Prisma schema — market-intelligence-os core data layer (task-01).
+// Spec ref: market_intelligence_os_web_app_spec_v2.md §7, §20
+//
+// SQLite notes:
+// - No enum support: every "enum" field is String, validated at the app layer (Zod, task-02).
+// - Arrays are stored as JSON strings (`*Json` columns).
 
 generator client {
   provider = "prisma-client-js"
@@ -9,4 +12,126 @@ generator client {
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
+}
+
+model RawSignal {
+  id              String   @id @default(cuid())
+  displayId       String   @unique
+  addedAt         DateTime @default(now())
+  sourceType      String
+  sourceName      String?
+  sourceUrl       String?
+  country         String?
+  language        String?
+  rawText         String
+  observedEntity  String?
+  observedPrice   String?
+  observedRank    String?
+  observedRating  Float?
+  observedReviews Int?
+  observedUpdate  DateTime?
+  signalTagsJson  String?   @default("[]")
+  extraJson       String?   @default("{}")
+  note            String?
+  origin          String    @default("manual") // manual | import | ai
+  status          String    @default("inbox") // inbox | ignored | archived
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  evidences Evidence[]
+
+  @@index([sourceType])
+  @@index([status])
+  @@index([observedEntity])
+}
+
+model Candidate {
+  id                 String   @id @default(cuid())
+  displayId          String   @unique
+  problemFamily      String?
+  title              String
+  targetUser         String?
+  contextTrigger     String?
+  painStatement      String?
+  currentSubstitute  String?
+  spendType          String?
+  monetizationGuess  String?
+  productFormFitJson String?  @default("[]")
+  initialInputsJson  String?  @default("{}") // InitialScore の素点
+  detailedInputsJson String?  @default("{}") // 詳細スコア12軸の素点
+  founderFit         Int?
+  buildEase          Int?
+  legalRisk          Int?
+  opsRisk            Int?
+  initialScore       Float?
+  detailedScore      Float?
+  signalBonus        Float?
+  uncertaintyPenalty Float?
+  confidence         Float?
+  scoreConfigVersion String?
+  stage              String   @default("normalized")
+  testableWithinDays Int?
+  testMethod         String?
+  nextAction         String?
+  rejectedReason     String?
+  rejectedReasonCode String?
+  origin             String   @default("manual")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  evidences      Evidence[]
+  scoreSnapshots ScoreSnapshot[]
+  decisionLogs   DecisionLog[]
+
+  @@index([stage])
+  @@index([rejectedReasonCode])
+}
+
+model Evidence {
+  id           String   @id @default(cuid())
+  candidateId  String
+  rawSignalId  String // 必須（一次ソース）
+  evidenceType String
+  strength     Int
+  credibility  Int      @default(3)
+  note         String?
+  createdAt    DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  rawSignal RawSignal @relation(fields: [rawSignalId], references: [id], onDelete: Restrict)
+
+  @@unique([candidateId, rawSignalId, evidenceType])
+  @@index([candidateId])
+}
+
+model ScoreSnapshot {
+  id                 String   @id @default(cuid())
+  candidateId        String
+  snapshotAt         DateTime @default(now())
+  initialScore       Float?
+  detailedScore      Float?
+  signalBonus        Float?
+  uncertaintyPenalty Float?
+  confidence         Float?
+  configVersion      String?
+  reason             String?
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+model DecisionLog {
+  id                 String   @id @default(cuid())
+  candidateId        String
+  decisionType       String
+  fromStage          String?
+  toStage            String?
+  relatedCandidateId String?
+  reason             String
+  decidedAt          DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
 }

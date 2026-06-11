@@ -69,15 +69,22 @@ function parseSeq(displayId: string): number {
  * 指定接頭辞で始まる既存 displayId のうち、連番が最大のものを +1 した次番号を返す。
  * 既存が無ければ 1。
  *
- * 連番は3桁ゼロ埋めのため、辞書順降順（orderBy desc）の先頭が連番最大に一致する
- * （001〜999 の範囲で成立。単一ローカルユーザー前提でこの範囲を超えない想定）。
+ * 連番を「数値として」パースして最大を取る。DB の辞書順ソートには依存しない。
+ * 辞書順だと連番が3桁を超えた瞬間に数値順とズレるため（"...-999" > "...-1000"）、
+ * 1000 以上で最大値を誤判定し重複発番する恐れがある。それを避けるため、該当接頭辞
+ * の全 displayId を取得し、各連番を数値化して Math.max で最大を求める（単一ローカル
+ * ユーザー前提で件数は十分小さい。RawSignal はその日分、Candidate も単一ユーザー分）。
  */
 async function nextSeqForPrefix(
-  findLatestDisplayId: (prefix: string) => Promise<string | null>,
+  findDisplayIds: (prefix: string) => Promise<string[]>,
   prefix: string,
 ): Promise<number> {
-  const latest = await findLatestDisplayId(prefix);
-  return latest ? parseSeq(latest) + 1 : 1;
+  const existing = await findDisplayIds(prefix);
+  if (existing.length === 0) {
+    return 1;
+  }
+  const maxSeq = existing.reduce((max, id) => Math.max(max, parseSeq(id)), 0);
+  return maxSeq + 1;
 }
 
 /**
@@ -93,12 +100,11 @@ export async function nextRawSignalDisplayId(
 ): Promise<string> {
   const prefix = `${RAW_SIGNAL_PREFIX}-${formatDate(now)}-`;
   const seq = await nextSeqForPrefix(async (p) => {
-    const latest = await tx.rawSignal.findFirst({
+    const rows = await tx.rawSignal.findMany({
       where: { displayId: { startsWith: p } },
-      orderBy: { displayId: "desc" },
       select: { displayId: true },
     });
-    return latest?.displayId ?? null;
+    return rows.map((r) => r.displayId);
   }, prefix);
   return `${prefix}${pad(seq, SEQ_PAD)}`;
 }
@@ -112,12 +118,11 @@ export async function nextRawSignalDisplayId(
 export async function nextCandidateDisplayId(tx: DisplayIdClient): Promise<string> {
   const prefix = `${CANDIDATE_PREFIX}-`;
   const seq = await nextSeqForPrefix(async (p) => {
-    const latest = await tx.candidate.findFirst({
+    const rows = await tx.candidate.findMany({
       where: { displayId: { startsWith: p } },
-      orderBy: { displayId: "desc" },
       select: { displayId: true },
     });
-    return latest?.displayId ?? null;
+    return rows.map((r) => r.displayId);
   }, prefix);
   return `${prefix}${pad(seq, SEQ_PAD)}`;
 }

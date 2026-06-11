@@ -1,0 +1,209 @@
+// RawSignal repository — task-08, spec v2 §7.2 / §9.3。
+//
+// RawSignal の CRUD と一覧フィルタをこの層に集約する。UI / API route（task-11）は
+// Prisma を直接触らず、必ずこの repository を経由する。
+//
+// 設計方針:
+// - enum（sourceType / status / origin）は task-02 の Zod スキーマで検証する
+//   （文字列直書き禁止）。入力は repository の入口で必ず parse する。
+// - 配列/オブジェクト（signalTags / extra）は task-02 の JSON ヘルパで
+//   `*Json` カラムと往復する（SQLite に配列型が無いため）。
+// - displayId（RS-YYYYMMDD-NNN）は task-07 の採番関数を、挿入と同一トランザクション
+//   内で呼ぶ（連番の競合を局所化する）。
+// - status から "linked" は廃止。「未紐付け（inbox）」は Evidence 0 件で派生判定する
+//   （unlinkedOnly フィルタ）。
+//
+// テスト容易性: 各関数は最後の引数で Prisma クライアントを差し替えられる（既定は
+//   シングルトン）。テストは専用の SQLite ファイルへ向けた Client を注入する。
+//
+// Out of scope: API route（task-11）/ Evidence link 自体の作成（task-10/12）。
+
+import { Prisma, type PrismaClient, type RawSignal } from "@prisma/client";
+
+import { sourceTypeSchema, statusSchema } from "../validation/enums";
+import {
+  parseJsonField,
+  rawSignalInputSchema,
+  serializeJsonField,
+  type RawSignalInput,
+} from "../validation/schemas";
+import { prisma } from "./client";
+import { nextRawSignalDisplayId } from "./displayId";
+
+/**
+ * repository が受け取る Prisma クライアント。
+ * トランザクションを張る create があるため、TransactionClient ではなく
+ * フル機能の PrismaClient を要求する。
+ */
+export type RawSignalDb = PrismaClient;
+
+/**
+ * 読み出し時のドメイン表現。`*Json` カラムを復元した `signalTags` / `extra` を
+ * 持つ（呼び出し側は JSON 文字列を意識しなくてよい）。
+ */
+export type RawSignalRecord = RawSignal & {
+  signalTags: string[];
+  extra: Record<string, unknown>;
+};
+
+/** 一覧の各行。紐付け候補数（Evidence 件数）を付与する（§9.3 のカラム）。 */
+export type RawSignalListItem = RawSignalRecord & {
+  evidenceCount: number;
+};
+
+/** list のフィルタ条件（すべて任意）。 */
+export interface RawSignalListFilter {
+  sourceType?: string;
+  status?: string;
+  /** Evidence が 0 件（＝どの Candidate にも紐付いていない inbox）だけを返す。 */
+  unlinkedOnly?: boolean;
+  /** 全文検索。Slice 1 では contains（LIKE）。FTS5 は Slice 2（task-31）。 */
+  q?: string;
+}
+
+/** 更新パッチ。入力スキーマの部分集合（省略フィールドは変更しない）。 */
+export const rawSignalUpdateSchema = rawSignalInputSchema.partial();
+export type RawSignalUpdate = Partial<RawSignalInput>;
+
+/** Prisma 行をドメイン表現へ復元する（`*Json` → 配列/オブジェクト）。 */
+function decode(row: RawSignal): RawSignalRecord {
+  return {
+    ...row,
+    signalTags: parseJsonField<string[]>(row.signalTagsJson, []),
+    extra: parseJsonField<Record<string, unknown>>(row.extraJson, {}),
+  };
+}
+
+/**
+ * RawSignal を 1 件作成する。
+ * 入力を Zod 検証し、displayId 採番と挿入を同一トランザクションで束ねる。
+ */
+export async function create(
+  input: RawSignalInput,
+  db: RawSignalDb = prisma,
+): Promise<RawSignalRecord> {
+  const data = rawSignalInputSchema.parse(input);
+  const row = await db.$transaction(async (tx) => {
+    const displayId = await nextRawSignalDisplayId(tx);
+    return tx.rawSignal.create({
+      data: {
+        displayId,
+        sourceType: data.sourceType,
+        sourceName: data.sourceName,
+        sourceUrl: data.sourceUrl,
+        country: data.country,
+        language: data.language,
+        rawText: data.rawText,
+        observedEntity: data.observedEntity,
+        observedPrice: data.observedPrice,
+        observedRank: data.observedRank,
+        observedRating: data.observedRating,
+        observedReviews: data.observedReviews,
+        observedUpdate: data.observedUpdate,
+        signalTagsJson: serializeJsonField(data.signalTags),
+        extraJson: serializeJsonField(data.extra),
+        note: data.note,
+        origin: data.origin,
+        status: data.status,
+      },
+    });
+  });
+  return decode(row);
+}
+
+/** id で 1 件取得する。存在しなければ null。 */
+export async function getById(
+  id: string,
+  db: RawSignalDb = prisma,
+): Promise<RawSignalRecord | null> {
+  const row = await db.rawSignal.findUnique({ where: { id } });
+  return row ? decode(row) : null;
+}
+
+/**
+ * 部分更新する。省略フィールドは変更しない（displayId / id は不変）。
+ * signalTags / extra が与えられた場合のみ `*Json` を再直列化する。
+ */
+export async function update(
+  id: string,
+  patch: RawSignalUpdate,
+  db: RawSignalDb = prisma,
+): Promise<RawSignalRecord> {
+  const data = rawSignalUpdateSchema.parse(patch);
+  const updateData: Prisma.RawSignalUpdateInput = {};
+  if (data.sourceType !== undefined) updateData.sourceType = data.sourceType;
+  if (data.sourceName !== undefined) updateData.sourceName = data.sourceName;
+  if (data.sourceUrl !== undefined) updateData.sourceUrl = data.sourceUrl;
+  if (data.country !== undefined) updateData.country = data.country;
+  if (data.language !== undefined) updateData.language = data.language;
+  if (data.rawText !== undefined) updateData.rawText = data.rawText;
+  if (data.observedEntity !== undefined) updateData.observedEntity = data.observedEntity;
+  if (data.observedPrice !== undefined) updateData.observedPrice = data.observedPrice;
+  if (data.observedRank !== undefined) updateData.observedRank = data.observedRank;
+  if (data.observedRating !== undefined) updateData.observedRating = data.observedRating;
+  if (data.observedReviews !== undefined) updateData.observedReviews = data.observedReviews;
+  if (data.observedUpdate !== undefined) updateData.observedUpdate = data.observedUpdate;
+  if (data.signalTags !== undefined) updateData.signalTagsJson = serializeJsonField(data.signalTags);
+  if (data.extra !== undefined) updateData.extraJson = serializeJsonField(data.extra);
+  if (data.note !== undefined) updateData.note = data.note;
+  if (data.origin !== undefined) updateData.origin = data.origin;
+  if (data.status !== undefined) updateData.status = data.status;
+
+  const row = await db.rawSignal.update({ where: { id }, data: updateData });
+  return decode(row);
+}
+
+/** id で 1 件削除する。 */
+export async function deleteById(id: string, db: RawSignalDb = prisma): Promise<void> {
+  await db.rawSignal.delete({ where: { id } });
+}
+
+/**
+ * 一覧を返す。sourceType / status は Zod 検証してから where に積む。
+ * q は contains（LIKE）で rawText / observedEntity / sourceName / note を横断検索。
+ * unlinkedOnly は Evidence 0 件のみ（`evidences: { none: {} }`）。
+ * 各行に紐付け候補数（evidenceCount）を付与する。
+ */
+export async function list(
+  filter: RawSignalListFilter = {},
+  db: RawSignalDb = prisma,
+): Promise<RawSignalListItem[]> {
+  const where: Prisma.RawSignalWhereInput = {};
+  if (filter.sourceType !== undefined) {
+    where.sourceType = sourceTypeSchema.parse(filter.sourceType);
+  }
+  if (filter.status !== undefined) {
+    where.status = statusSchema.parse(filter.status);
+  }
+  if (filter.q !== undefined && filter.q !== "") {
+    const q = filter.q;
+    where.OR = [
+      { rawText: { contains: q } },
+      { observedEntity: { contains: q } },
+      { sourceName: { contains: q } },
+      { note: { contains: q } },
+    ];
+  }
+  if (filter.unlinkedOnly) {
+    where.evidences = { none: {} };
+  }
+
+  const rows = await db.rawSignal.findMany({
+    where,
+    orderBy: { addedAt: "desc" },
+    include: { _count: { select: { evidences: true } } },
+  });
+  return rows.map(({ _count, ...row }) => ({
+    ...decode(row),
+    evidenceCount: _count.evidences,
+  }));
+}
+
+/** RawSignal 操作の集約 repository（delete を含むため named export と併設）。 */
+export const rawSignalRepo = {
+  create,
+  getById,
+  update,
+  delete: deleteById,
+  list,
+};

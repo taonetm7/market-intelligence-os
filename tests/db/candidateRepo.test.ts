@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { candidateRepo } from "../../lib/db/candidateRepo";
-import type { CandidateInput, InitialInputs } from "../../lib/validation/schemas";
+import { candidateRepo, type CandidateCreate } from "../../lib/db/candidateRepo";
+import type { InitialInputs } from "../../lib/validation/schemas";
 
 // task-09 acceptance criteria (spec v2 §7.3 / §8.9 / §15.1):
 // - CRUD（作成→取得→更新）・setStage
@@ -47,11 +47,12 @@ beforeEach(async () => {
 });
 
 // 妥当な Candidate 入力の最小形（テストごとに上書きして使う）。
-function inputFixture(overrides: Partial<CandidateInput> = {}): CandidateInput {
+// create の入力型は CandidateCreate（stage から 'rejected' を除外）。
+function inputFixture(overrides: Partial<CandidateCreate> = {}): CandidateCreate {
   return {
     title: "テスト候補",
     ...overrides,
-  } as CandidateInput;
+  } as CandidateCreate;
 }
 
 // InitialScore の素点（全軸 0〜5）。
@@ -191,6 +192,20 @@ describe("candidateRepo CRUD", () => {
     );
     expect(rejected.stage).toBe("rejected");
     expect(rejected.rejectedReasonCode).toBe("low_pain");
+  });
+
+  it("refuses to create with stage='rejected' (must go through reject(); Codex regression)", async () => {
+    // 不変条件 §15.1: rejected への到達は理由コード必須 = reject() 経由のみ。
+    // create の stage も settable に限定し、理由コード無しで rejected 候補を新規作成する
+    // 迂回路（setStage / update と同型）を塞ぐ。
+    await expect(
+      // @ts-expect-error create スキーマの stage は 'rejected' を除外（型でも弾く）。
+      candidateRepo.create({ title: "棄却済みで作ろうとする", stage: "rejected" }, db),
+    ).rejects.toThrow();
+
+    // 迂回は成立していない（rejected な候補は 1 件も作られていない）。
+    const all = await candidateRepo.list({}, db);
+    expect(all).toHaveLength(0);
   });
 
   it("assigns a CND-NNN displayId and increments across creates", async () => {

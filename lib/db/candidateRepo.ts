@@ -36,7 +36,6 @@ import {
   parseJsonField,
   score0to5,
   serializeJsonField,
-  type CandidateInput,
   type InitialInputs,
 } from "../validation/schemas";
 import { prisma } from "./client";
@@ -103,6 +102,22 @@ export const settableStageSchema = stageSchema.exclude(["rejected"]);
 export type SettableStage = z.infer<typeof settableStageSchema>;
 
 /**
+ * 作成入力。共有の `candidateInputSchema` をベースに、`stage` だけ
+ * `settableStageSchema`（`rejected` 除外）へ差し替える。
+ *
+ * 不変条件（§15.1）: `rejected` への到達は理由コード必須＝`reject()` 経由のみ。
+ * `candidateInputSchema.stage` は `default("normalized")` だが `rejected` も許容するため、
+ * これをそのまま create に流すと理由コード無しで `stage='rejected'` の候補を新規作成でき、
+ * setStage / update と同じ迂回路が create に残ってしまう。そこで create の入口でも
+ * stage を settable に限定し、型レベル（`rejected` を union から除外）と実行時（Zod が弾く）の
+ * 両面で迂回を塞ぐ。`default("normalized")` は維持する（既定ステージは従来どおり）。
+ */
+export const candidateCreateSchema = candidateInputSchema.extend({
+  stage: settableStageSchema.default("normalized"),
+});
+export type CandidateCreate = z.infer<typeof candidateCreateSchema>;
+
+/**
  * 更新パッチ。入力スキーマの部分集合（省略フィールドは変更しない）。
  *
  * 注意（task-08 の教訓）: `candidateInputSchema.partial()` だけでは不十分。Zod4 は
@@ -165,12 +180,13 @@ function decode(row: Candidate): CandidateRecord {
  * Candidate を 1 件作成する。
  * 入力を Zod 検証し、displayId 採番と挿入を同一トランザクションで束ねる。
  * 派生スコア（initialScore 等）と scoreConfigVersion はここでは設定しない（saveScores 専用）。
+ * `stage='rejected'` は受け付けない（§15.1: rejected への到達は `reject()` 経由のみ）。
  */
 export async function create(
-  input: CandidateInput,
+  input: CandidateCreate,
   db: CandidateDb = prisma,
 ): Promise<CandidateRecord> {
-  const data = candidateInputSchema.parse(input);
+  const data = candidateCreateSchema.parse(input);
   const row = await db.$transaction(async (tx) => {
     const displayId = await nextCandidateDisplayId(tx);
     return tx.candidate.create({

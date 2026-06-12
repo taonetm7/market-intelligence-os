@@ -47,3 +47,217 @@ a {
     color-scheme: dark;
   }
 }
+
+/* ---- task-16: app shell（最小・機能本位。美麗UIはやらない） ---- */
+.mi-app {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+}
+
+.mi-sidebar {
+  flex: 0 0 220px;
+  border-right: 1px solid #e5e5e5;
+  padding: 16px 12px;
+  background: #fafafa;
+}
+
+.mi-brand {
+  font-weight: 700;
+  font-size: 14px;
+  padding: 4px 8px 12px;
+}
+
+.mi-nav__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mi-nav__link {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #333;
+}
+
+.mi-nav__link:hover {
+  background: #efefef;
+}
+
+.mi-nav__link--active {
+  background: #111;
+  color: #fff;
+}
+
+.mi-main {
+  flex: 1 1 auto;
+  padding: 24px 28px;
+  min-width: 0;
+}
+
+.mi-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.mi-page-header__title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.mi-page-header__desc {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #666;
+}
+
+.mi-placeholder-note {
+  font-size: 13px;
+  color: #888;
+}
+
+/* ---- 共通 UI ---- */
+.mi-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.mi-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mi-btn--primary {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+
+.mi-btn--danger {
+  background: #b42318;
+  color: #fff;
+  border-color: #b42318;
+}
+
+.mi-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.mi-input,
+.mi-select {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 13px;
+  width: 100%;
+}
+
+.mi-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  background: #f4f4f4;
+  color: #333;
+}
+
+.mi-badge--info {
+  background: #eef4ff;
+  border-color: #cdddff;
+  color: #1b50b3;
+}
+
+.mi-badge--success {
+  background: #eafaf0;
+  border-color: #bfe9cd;
+  color: #1a7f3c;
+}
+
+.mi-badge--warning {
+  background: #fff7e6;
+  border-color: #ffe2a8;
+  color: #95620d;
+}
+
+.mi-badge--danger {
+  background: #fdeceb;
+  border-color: #f7c9c5;
+  color: #b42318;
+}
+
+.mi-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.mi-table th,
+.mi-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.mi-table th {
+  font-weight: 600;
+  color: #555;
+}
+
+.mi-table__empty {
+  padding: 16px 10px;
+  color: #888;
+}
+
+.mi-modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.mi-modal__dialog {
+  background: #fff;
+  border-radius: 8px;
+  max-width: 480px;
+  width: 100%;
+  padding: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.mi-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.mi-modal__title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.mi-modal__footer {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

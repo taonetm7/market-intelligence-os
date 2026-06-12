@@ -16,6 +16,11 @@ import type { ScoringConfig } from "./config";
 // testableWithinDays = null は「検証手段が未定義」を意味し、検証可能性ゲートを **不合格** とする
 // （高スコアでも検証できない候補は進級させない・§8.7 の趣旨）。
 //
+// 不正入力の扱い（fail-safe）: ゲートの目的は「進級させてよいかの確認」なので、判定できない
+// 入力は安全側＝**不合格**に倒す。具体的には、各数値が非有限（NaN / ±Infinity）の場合、および
+// testableWithinDays が負数（日数として無意味）の場合を不合格とする。NaN は `<`/`>` 比較が
+// すべて false になり素通りしうるため、明示的に弾く必要がある。
+//
 // 純粋関数（副作用・外部 I/O・グローバル状態なし）。
 //
 // Out of scope: TotalForGate の算出（task-26）/ confidence 計算（task-06）/ DB 反映（task-30）/
@@ -31,7 +36,7 @@ export interface GateTop30Inputs {
   distinctSourceTypes: number;
   /**
    * 検証可能になるまでの日数。`null` は検証手段が未定義であることを表し、不合格扱いとする
-   * （検証可能性ゲートの趣旨・§8.7）。
+   * （検証可能性ゲートの趣旨・§8.7）。負数は日数として無意味なため不合格扱い。
    */
   testableWithinDays: number | null;
 }
@@ -60,15 +65,23 @@ export function evaluateTop30Gate(inputs: GateTop30Inputs, config: ScoringConfig
   const gate = config.gates.top30;
   const reasons: string[] = [];
 
-  if (inputs.totalForGate < gate.minTotal) {
+  // NaN/±Infinity は `<`/`>` 比較がすべて false になり閾値チェックを素通りするため、
+  // 各数値はまず有限性を確認し、不正なら不合格にする（fail-safe）。
+  if (!Number.isFinite(inputs.totalForGate)) {
+    reasons.push(`TotalForGate が不正な数値（${inputs.totalForGate}）`);
+  } else if (inputs.totalForGate < gate.minTotal) {
     reasons.push(`TotalForGate が不足（${inputs.totalForGate} < 必要 ${gate.minTotal}）`);
   }
 
-  if (inputs.confidence < gate.minConfidence) {
+  if (!Number.isFinite(inputs.confidence)) {
+    reasons.push(`confidence が不正な数値（${inputs.confidence}）`);
+  } else if (inputs.confidence < gate.minConfidence) {
     reasons.push(`confidence が不足（${inputs.confidence} < 必要 ${gate.minConfidence}）`);
   }
 
-  if (inputs.distinctSourceTypes < gate.minDistinctSources) {
+  if (!Number.isFinite(inputs.distinctSourceTypes)) {
+    reasons.push(`独立チャネル数が不正な数値（${inputs.distinctSourceTypes}）`);
+  } else if (inputs.distinctSourceTypes < gate.minDistinctSources) {
     reasons.push(
       `独立チャネル数が不足（${inputs.distinctSourceTypes} < 必要 ${gate.minDistinctSources}）`,
     );
@@ -76,6 +89,12 @@ export function evaluateTop30Gate(inputs: GateTop30Inputs, config: ScoringConfig
 
   if (inputs.testableWithinDays === null) {
     reasons.push("検証手段が未定義（testableWithinDays = null）＝検証可能性ゲート不合格");
+  } else if (!Number.isFinite(inputs.testableWithinDays)) {
+    reasons.push(`検証までの日数が不正な数値（testableWithinDays = ${inputs.testableWithinDays}）`);
+  } else if (inputs.testableWithinDays < 0) {
+    reasons.push(
+      `検証までの日数が負数で不正（testableWithinDays = ${inputs.testableWithinDays}）`,
+    );
   } else if (inputs.testableWithinDays > gate.maxTestDays) {
     reasons.push(
       `検証までの日数が長すぎる（${inputs.testableWithinDays} > 上限 ${gate.maxTestDays}）`,

@@ -117,6 +117,78 @@ describe("evaluateTop30Gate", () => {
     });
   });
 
+  // Codexレビュー指摘への回帰テスト（不正入力を pass させない）。
+  describe("invalid inputs are rejected (fail-safe)", () => {
+    it("fails when totalForGate is NaN", () => {
+      const result = evaluateTop30Gate({ ...passingInputs, totalForGate: NaN }, scoringConfig);
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("TotalForGate")]);
+    });
+
+    it("fails when confidence is NaN", () => {
+      const result = evaluateTop30Gate({ ...passingInputs, confidence: NaN }, scoringConfig);
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("confidence")]);
+    });
+
+    it("fails when distinctSourceTypes is NaN", () => {
+      const result = evaluateTop30Gate(
+        { ...passingInputs, distinctSourceTypes: NaN },
+        scoringConfig,
+      );
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("独立チャネル数")]);
+    });
+
+    it("fails when testableWithinDays is NaN (and does not emit the maxTestDays reason)", () => {
+      const result = evaluateTop30Gate(
+        { ...passingInputs, testableWithinDays: NaN },
+        scoringConfig,
+      );
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("不正な数値")]);
+      expect(result.reasons.some((r) => r.includes("検証までの日数が長すぎる"))).toBe(false);
+    });
+
+    it("fails when every numeric field is NaN (NaN must never slip through the gate)", () => {
+      const result = evaluateTop30Gate(
+        {
+          totalForGate: NaN,
+          confidence: NaN,
+          distinctSourceTypes: NaN,
+          testableWithinDays: NaN,
+        },
+        scoringConfig,
+      );
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toHaveLength(4);
+    });
+
+    it("fails when totalForGate is Infinity", () => {
+      const result = evaluateTop30Gate(
+        { ...passingInputs, totalForGate: Infinity },
+        scoringConfig,
+      );
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("TotalForGate")]);
+    });
+
+    it("fails when testableWithinDays is negative (negative days are meaningless)", () => {
+      const result = evaluateTop30Gate(
+        { ...passingInputs, testableWithinDays: -1 },
+        scoringConfig,
+      );
+      expect(result.pass).toBe(false);
+      expect(result.reasons).toEqual([expect.stringContaining("負数")]);
+    });
+
+    it("passes at exactly 0 days (0 is a valid same-day-testable input)", () => {
+      expect(
+        evaluateTop30Gate({ ...passingInputs, testableWithinDays: 0 }, scoringConfig).pass,
+      ).toBe(true);
+    });
+  });
+
   it("lists every failing condition when all are violated", () => {
     const result = evaluateTop30Gate(
       { totalForGate: 0, confidence: 0, distinctSourceTypes: 0, testableWithinDays: null },

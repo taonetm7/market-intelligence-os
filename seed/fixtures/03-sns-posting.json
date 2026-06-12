@@ -1,0 +1,88 @@
+{
+  "key": "sns-posting",
+  "top100": "pass",
+  "candidate": {
+    "problemFamily": "店舗のSNS運用",
+    "title": "小規模店舗向け SNS投稿支援（下書き・カレンダー）",
+    "targetUser": "小規模店舗オーナー",
+    "contextTrigger": "Instagram/Xの投稿を継続したいがネタ出しと作成が毎回つらい",
+    "painStatement": "毎回ネタ出し・文章作成・投稿スケジュール管理が面倒で続かない。外注すると高いが、完全自動では不安がある。",
+    "currentSubstitute": "ココナラ等での投稿代行（月数万円）／自力で不定期投稿",
+    "spendType": "outsourcing",
+    "monetizationGuess": "月額2,980円〜のサブスク",
+    "productFormFit": ["AI SNS投稿支援", "店舗向け", "カレンダー/テンプレ/投稿下書き", "月額課金"],
+    "legalRisk": 2,
+    "opsRisk": 2,
+    "founderFit": 4,
+    "buildEase": 3,
+    "testableWithinDays": 7,
+    "testMethod": "1業種に絞り投稿下書きを手動生成し、継続発注の意思を確認する",
+    "nextAction": "代行サービスの料金・作業範囲を5件調べ、置換価値を数値化する"
+  },
+  "initialInputs": {
+    "spend": 4,
+    "dissatisfaction": 4,
+    "pain": 4,
+    "frequency": 4,
+    "discoverability": 3,
+    "substitute": 3,
+    "legalRisk": 2,
+    "opsRisk": 2
+  },
+  "rawSignals": [
+    {
+      "sourceType": "outsource",
+      "sourceName": "クラウドソーシング（投稿代行）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "小規模店舗向けSNS投稿代行が多数売られている。月数万円で継続代行されている。投稿文作成・画像選定・カレンダー管理が主作業。",
+      "observedEntity": "SNS投稿代行サービス",
+      "observedPrice": "¥30,000/月",
+      "observedUpdate": "2026-05-25",
+      "signalTags": ["spend", "outsourcing", "recurring"]
+    },
+    {
+      "sourceType": "community",
+      "sourceName": "店舗オーナーコミュニティ",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「投稿が続かない」「ネタ切れ」「結局放置している」という店舗オーナーの声が多い。",
+      "observedEntity": "店舗のSNS運用",
+      "observedUpdate": "2026-05-18",
+      "signalTags": ["dissatisfaction", "retention"]
+    },
+    {
+      "sourceType": "sns",
+      "sourceName": "検索・投稿トレンド",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「店舗 SNS 代行」「Instagram 運用 代行」関連の投稿・検索が多い。",
+      "observedEntity": "店舗 SNS 代行",
+      "observedUpdate": "2026-06-02",
+      "signalTags": ["search", "intent"]
+    }
+  ],
+  "evidence": [
+    {
+      "rawSignal": 0,
+      "evidenceType": "spend",
+      "strength": 5,
+      "credibility": 4,
+      "note": "継続代行に実際の月額支出が発生"
+    },
+    {
+      "rawSignal": 1,
+      "evidenceType": "dissatisfaction",
+      "strength": 3,
+      "credibility": 3,
+      "note": "自力運用の継続困難・放置"
+    },
+    {
+      "rawSignal": 2,
+      "evidenceType": "search",
+      "strength": 3,
+      "credibility": 3,
+      "note": "代行・運用支援の探索行動"
+    }
+  ]
+}

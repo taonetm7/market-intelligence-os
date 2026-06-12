@@ -1,0 +1,73 @@
+{
+  "key": "english-study",
+  "top100": "fail",
+  "failReason": "initialScore がゲート閾値未満（境界: スコア不足）",
+  "candidate": {
+    "problemFamily": "子どもの学習記録",
+    "title": "幼児〜小学生向け 家庭の英語学習記録アプリ",
+    "targetUser": "子どもの英語学習を家庭で管理する親",
+    "contextTrigger": "毎日の学習後に時間・教材・発話メモを残したい",
+    "painStatement": "既存の学習管理アプリは学校/受験向けで、幼児〜小学生の英語学習記録には合わない。入力が面倒で続かない。",
+    "currentSubstitute": "紙のノート／無料の汎用学習アプリ",
+    "spendType": "none",
+    "monetizationGuess": "年額課金（無料層あり）",
+    "productFormFit": ["親向けモバイルアプリ", "教育/習慣記録", "AIコメント生成", "年額課金"],
+    "legalRisk": 1,
+    "opsRisk": 1,
+    "founderFit": 3,
+    "buildEase": 4,
+    "testableWithinDays": 10,
+    "testMethod": "親コミュニティで記録テンプレを配り、継続率を1週間観測する",
+    "nextAction": "無料アプリへの不満レビューを集め、課金に至る痛点があるか見極める"
+  },
+  "initialInputs": {
+    "spend": 1,
+    "dissatisfaction": 3,
+    "pain": 3,
+    "frequency": 2,
+    "discoverability": 2,
+    "substitute": 2,
+    "legalRisk": 1,
+    "opsRisk": 1
+  },
+  "rawSignals": [
+    {
+      "sourceType": "review",
+      "sourceName": "学習記録アプリ レビュー",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "既存の学習記録アプリで「入力が面倒」「親が確認しづらい」「英語学習の記録に合わない」というレビューが複数ある。",
+      "observedEntity": "汎用学習記録アプリ",
+      "observedRating": 2.8,
+      "observedReviews": 210,
+      "observedUpdate": "2026-05-30",
+      "signalTags": ["dissatisfaction", "ux", "fit"]
+    },
+    {
+      "sourceType": "sns",
+      "sourceName": "親コミュニティ（SNS）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「うちの子の英語、記録が続かない」「市販アプリは受験向けで合わない」という親の投稿が散見される。",
+      "observedEntity": "家庭学習の記録",
+      "observedUpdate": "2026-05-22",
+      "signalTags": ["search", "parenting"]
+    }
+  ],
+  "evidence": [
+    {
+      "rawSignal": 0,
+      "evidenceType": "dissatisfaction",
+      "strength": 4,
+      "credibility": 3,
+      "note": "既存アプリの入力負荷・適合性への不満"
+    },
+    {
+      "rawSignal": 1,
+      "evidenceType": "search",
+      "strength": 2,
+      "credibility": 2,
+      "note": "親の関心はあるが弱め（無料で足りるとの声も）"
+    }
+  ]
+}

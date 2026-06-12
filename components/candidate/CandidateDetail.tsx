@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PageHeader } from "../layout/PageHeader";
 import { Badge, Button } from "../ui";
+import { LinkDialog } from "../evidence/LinkDialog";
 import { formatConfidence, formatScore, stageTone } from "./CandidateTable";
 import { ScoringPanel, type ScoreValues } from "./ScoringPanel";
 import { RejectModal, promoteCandidate, rejectCandidate, type RejectInput } from "./PromoteRejectModal";
@@ -245,6 +246,11 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  // Evidence link UI（task-22 导线B）の開閉。
+  const [linkOpen, setLinkOpen] = useState(false);
+  // link で signalStats が変わったことを ScoringPanel に伝える信号。+1 のたびに、採点済みなら
+  // gate/confidence を同じ素点で再計算させ進級可否を即更新する（§9.5/§9.6）。
+  const [scoringReload, setScoringReload] = useState(0);
   const guardRef = useRef(createLatestGuard());
 
   const load = useCallback(async () => {
@@ -310,12 +316,25 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
     [runAction, candidateId],
   );
 
-  // TODO(task-22): Evidence 追加は候補に Raw Signal を link する UI を起動する。
-  // task-22 未実装のため、ここでは起動フックのプレースホルダとして通知のみ出す（導線は動く）。
+  // Evidence 追加（task-22 导线B）: Candidate を固定し、未紐付け Raw Signal を検索して link する。
   const handleAddEvidence = useCallback(() => {
     setError(null);
-    setNotice("Evidence の追加（link UI）は task-22 で実装予定です");
+    setNotice(null);
+    setLinkOpen(true);
   }, []);
+
+  // link 成功 → 通知して候補・Evidence を取り直す。さらに scoringReload を進め、採点済みなら
+  // ScoringPanel に gate/confidence を再計算させて進級可否を即更新する（§9.5/§9.6）。
+  const handleLinked = useCallback(() => {
+    setLinkOpen(false);
+    setNotice("Raw Signal を Evidence として link しました");
+    void load();
+    setScoringReload((n) => n + 1);
+  }, [load]);
+
+  // 採点（保存して計算・link 後の再計算）成功時に候補を取り直し、stage/score/confidence を反映する。
+  // ScoringPanel の reloadSignal 再計算が安定して走るよう、参照を固定する（load は安定）。
+  const handleScored = useCallback(() => void load(), [load]);
 
   // 昇格できるのは normalized の候補のみ（§8.9。Slice 1 は normalized→top100）。
   const canPromote = candidate?.stage === "normalized";
@@ -377,7 +396,8 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
             <ScoringPanel
               candidateId={candidate.id}
               initialValues={candidate.initialInputs ?? undefined}
-              onScored={() => void load()}
+              onScored={handleScored}
+              reloadSignal={scoringReload}
             />
           </div>
         </>
@@ -389,6 +409,18 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
         onSubmit={handleRejectSubmit}
         submitting={actionPending}
       />
+
+      {/* Evidence link UI（导线B）: Candidate を固定し未紐付け Raw Signal を検索して link する。
+          開いている間だけ描画し、開くたびにフレッシュマウントして入力状態を初期化する。 */}
+      {linkOpen ? (
+        <LinkDialog
+          open
+          onClose={() => setLinkOpen(false)}
+          candidateId={candidateId}
+          candidateLabel={candidate?.displayId}
+          onLinked={handleLinked}
+        />
+      ) : null}
     </>
   );
 }

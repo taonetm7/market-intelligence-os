@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge, Button, type BadgeTone } from "../ui";
 
@@ -214,38 +214,85 @@ export type ScoringPanelProps = {
   initialValues?: ScoreValues;
   /** 保存（計算）成功時に呼ばれる（親で候補を再取得して stage/score を反映する）。 */
   onScored?: (result: ScoringResult) => void;
+  /**
+   * Evidence link 等で signalStats（distinct ソース / 強シグナル / 直接支出）が変わったとき、
+   * 親が値を +1 する。既に採点済みなら同じ素点で gate/confidence を再計算し、進級可否を
+   * 即時更新する（§9.5/§9.6: 判断の文脈を割らない）。未採点・初回マウント時は何もしない。
+   */
+  reloadSignal?: number;
 };
 
 /**
  * Scoring パネル本体（フォーム）。素点8軸を入力 → 保存で計算 API を叩き、結果と
  * 進級可否を表示する。送信ロジックは submitScoring（純関数）に委譲する。
  */
-export function ScoringPanel({ candidateId, initialValues, onScored }: ScoringPanelProps) {
+export function ScoringPanel({
+  candidateId,
+  initialValues,
+  onScored,
+  reloadSignal,
+}: ScoringPanelProps) {
   const [values, setValues] = useState<ScoreValues>(initialValues ?? {});
   const [result, setResult] = useState<ScoringResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 最後に採点した素点。Evidence link 後の再計算で同じ素点を使うために保持する（未採点は null）。
+  const lastInputsRef = useRef<ScoreValues | null>(null);
+  // 最新の計算リクエストだけ採用する連番ガード（手動採点と link 再計算の競合で古い結果を捨てる）。
+  const seqRef = useRef(0);
 
   function update(key: string, raw: string) {
     const next = raw === "" ? undefined : Number(raw);
     setValues((prev) => ({ ...prev, [key]: next }));
   }
 
+  /**
+   * 素点を計算・保存して結果を反映する共通処理（手動送信と Evidence link 後の再計算で共有）。
+   * 計算式は submitScoring（純関数・fetcher DI）に委譲し、ここは state 反映と連番ガードだけを持つ。
+   * 成功時に採点済みの素点を記録し、reloadSignal 起点の再計算が同じ素点を使えるようにする。
+   */
+  const runScoring = useCallback(
+    async (vals: ScoreValues) => {
+      const seq = (seqRef.current += 1);
+      setSubmitting(true);
+      setError(null);
+      try {
+        const scored = await submitScoring(candidateId, vals);
+        if (seq !== seqRef.current) return; // 古い計算結果は破棄。
+        lastInputsRef.current = vals;
+        setResult(scored);
+        onScored?.(scored);
+      } catch (e) {
+        if (seq !== seqRef.current) return;
+        setError(e instanceof Error ? e.message : "スコアの計算・保存に失敗しました");
+      } finally {
+        if (seq === seqRef.current) setSubmitting(false);
+      }
+    },
+    [candidateId, onScored],
+  );
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const scored = await submitScoring(candidateId, values);
-      setResult(scored);
-      onScored?.(scored);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "スコアの計算・保存に失敗しました");
-    } finally {
-      setSubmitting(false);
-    }
+    await runScoring(values);
   }
+
+  // Evidence link 等で signalStats が変わったとき（reloadSignal 変化）、既に採点済みなら
+  // 同じ素点で gate/confidence を再計算して進級可否を即更新する。未採点（gate 未表示）や
+  // 初回マウントでは何もしない。setState を effect 本体から外へ出すためタイマ経由で実行する
+  // （cascading render 警告を避ける。task-19/20 と同じ流儀）。
+  const firstReloadRef = useRef(true);
+  useEffect(() => {
+    if (firstReloadRef.current) {
+      firstReloadRef.current = false;
+      return;
+    }
+    const inputs = lastInputsRef.current;
+    if (inputs === null) return; // 未採点なら再計算対象が無い。
+    const timer = setTimeout(() => void runScoring(inputs), 0);
+    return () => clearTimeout(timer);
+  }, [reloadSignal, runScoring]);
 
   const renderAxis = (axis: ScoreAxis) => (
     <label key={axis.key} style={{ display: "block", marginBottom: 10 }}>

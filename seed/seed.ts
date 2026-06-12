@@ -18,6 +18,10 @@
 // - package.json の seed は `node --experimental-transform-types seed/seed.ts`。lib は parameter
 //   property（evidenceRepo の EvidenceDuplicateLinkError 等）を含むため、strip-only ではなく
 //   transform を使う。
+// - Node 要件: >=22.9.0。--experimental-transform-types（22.7.0+）と --env-file-if-exists（22.9.0+）
+//   を使うため、それ未満（例: Node 20 系）では Node がフラグを解釈できずスクリプト実行前に落ちる。
+//   package.json の engines で明示し、seed スクリプト先頭で素の node によるバージョンガード
+//   （実験フラグ抜き）を通して、要件未満なら分かりやすいメッセージで即終了させる。
 // - lib は拡張子なしの相対 import と attribute 無しの JSON import（scoring/config.ts）を内部で使う。
 //   Node 標準の ESM 解決は拡張子を補完せず JSON は import attribute を要求するため、CLI 起動時のみ
 //   最小の resolve/load フックを register して両者を吸収する（外部依存ゼロ・data: URL でインライン保持）。

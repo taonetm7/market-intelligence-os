@@ -10,9 +10,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "seed": "node --env-file-if-exists=.env --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --experimental-transform-types seed/seed.ts",
+    "seed": "node -e \"const v=process.versions.node.split('.').map(Number);if(v[0]<22||(v[0]===22&&v[1]<9)){console.error('[seed] Node >=22.9.0 が必要です（--experimental-transform-types / --env-file-if-exists を使用）。現在: v'+process.versions.node);process.exit(1)}\" && node --env-file-if-exists=.env --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning --experimental-transform-types seed/seed.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
+  },
+  "engines": {
+    "node": ">=22.9.0"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

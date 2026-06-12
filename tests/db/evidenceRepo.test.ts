@@ -150,6 +150,8 @@ describe("evidenceRepo.link / unlink / listByCandidate", () => {
       db,
     );
 
+    // 新しい順（createdAt 降順）。createdAt が同一ミリ秒で並んでも id 降順の
+    // 第2ソートキーで決定的に並ぶため、後に作った second が必ず先頭に来る（フレーキー回避）。
     const list = await evidenceRepo.listByCandidate(candidateA, db);
     expect(list.map((e) => e.id)).toEqual([second.id, first.id]);
   });

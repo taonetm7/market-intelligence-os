@@ -6,12 +6,15 @@ import { join } from "node:path";
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-// task-21 promote API（spec v2 §8.2 / §8.9）:
+// promote API（spec v2 §8.2 / §8.7 / §8.9）— task-21 起点・task-30 で多段昇格へ更新:
 // - normalized→top100 の1段昇格（Top100 ゲート通過時のみ・人間操作）
 // - 未採点 / ゲート未通過は 422（reasons 付き）
-// - normalized 以外の stage は 409（昇格対象でない／自動昇格しない）
+// - 昇格は1段ずつ進む。次段にゲートがある場合（→top100 / →top30）は未達なら 422
+//   （task-30 で多段化。Slice 1 の「normalized 以外は一律 409」前提は陳腐化した）
+// - 終端 stage（focus / archived / rejected 等、次段を持たない）からの昇格は 409
 // - 存在しない id は 404
 //
+// 詳細スコア（→top30 ゲートの前提）は scoring/detailed 経由で保存する。
 // candidate.api.test.ts と同方式で、本物の route → repository → DB 経路を検証する。
 // 専用 SQLite に DATABASE_URL を向けてから client / handler を動的 import する。dev.db は触らない。
 
@@ -175,18 +178,32 @@ describe("POST /api/candidates/[id]/promote", () => {
     expect(reread?.stage).toBe("normalized");
   });
 
-  it("returns 409 when promoting from a non-normalized stage (no double promote)", async () => {
+  it("blocks the next step (top100→top30) with 422 when not detailed-scored yet", async () => {
+    // task-30: 多段昇格。top100 まで昇格後の再昇格は top30 を狙うが、詳細スコア未採点だと
+    // Top30 ゲートを判定できず 422（ゲート未達）になる（Slice 1 の一律 409 は陳腐化）。
     const cnd = await createCandidate();
     await seedStrongEvidence(cnd.id);
     await score(cnd.id, STRONG_INPUTS);
 
     const first = await promoteRoute.POST(promoteRequest(), idCtx(cnd.id));
-    expect(first.status).toBe(200);
-    // 既に top100 → もう一度昇格しようとすると 409（Slice 1 は normalized からのみ）。
+    expect(first.status).toBe(200); // normalized → top100
+
     const second = await promoteRoute.POST(promoteRequest(), idCtx(cnd.id));
-    expect(second.status).toBe(409);
+    expect(second.status).toBe(422); // 詳細未採点 → top30 ゲート判定不能で昇格不可
     const reread = await prisma.candidate.findUnique({ where: { id: cnd.id } });
     expect(reread?.stage).toBe("top100");
+  });
+
+  it("returns 409 when promoting from a terminal stage (no next stage)", async () => {
+    // 終端 stage（focus 等、次段を持たない）からの昇格は 409。create は stage を受け付けない
+    // ため、Prisma 直で終端 stage に置いてから昇格を試す（仕様上 409 が残るケースの検証）。
+    const cnd = await createCandidate();
+    await prisma.candidate.update({ where: { id: cnd.id }, data: { stage: "focus" } });
+
+    const res = await promoteRoute.POST(promoteRequest(), idCtx(cnd.id));
+    expect(res.status).toBe(409);
+    const reread = await prisma.candidate.findUnique({ where: { id: cnd.id } });
+    expect(reread?.stage).toBe("focus");
   });
 
   it("returns 404 when promoting a missing id", async () => {

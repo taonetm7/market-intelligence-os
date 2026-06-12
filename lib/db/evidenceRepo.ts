@@ -127,6 +127,11 @@ export async function unlink(id: string, db: EvidenceDb = prisma): Promise<void>
 /**
  * 指定 Candidate に紐付く Evidence を返す（新しい順）。
  * 表示・集計の起点。RawSignal の中身が必要な集計は signalStatsByCandidate を使う。
+ *
+ * 並びは createdAt 降順。createdAt はミリ秒精度のため同一トランザクション内の連続作成で
+ * 同値になり得る。その場合に順序が不定（フレーキー）になるのを防ぐため、第2ソートキーに
+ * `id` 降順を足して決定的にする。cuid は同一プロセス内で単調増加するため、createdAt 同値時も
+ * 後に作られた行（= 大きい id）が先頭に来て「新しい順」の意味と一致する。
  */
 export async function listByCandidate(
   candidateId: string,
@@ -134,7 +139,7 @@ export async function listByCandidate(
 ): Promise<Evidence[]> {
   return db.evidence.findMany({
     where: { candidateId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
   });
 }
 

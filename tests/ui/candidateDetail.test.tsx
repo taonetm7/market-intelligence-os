@@ -37,6 +37,7 @@ import {
   type CandidateDetailData,
   type EvidenceRow,
 } from "../../components/candidate/CandidateDetail";
+import { submitLink, type LinkParams } from "../../components/evidence/LinkDialog";
 import { REJECTED_REASON_CODE_VALUES } from "../../lib/validation/enums";
 
 // task-21 Candidate 詳細（spec v2 §9.5 / §8.1-8.2 / §8.9）。
@@ -185,6 +186,90 @@ describe("ScoringPanel: 描画スモーク", () => {
     expect(html).toContain("legalRisk");
     expect(html).toContain("opsRisk");
     expect(html).toContain("保存して計算");
+  });
+});
+
+// task-22 Phase 2（Codexレビュー指摘対応）: Candidate 側 link 成功後、進級可否（Top100 ゲート）が
+// 更新される導線の回帰テスト。ScoringPanel の gate は signalStats（distinct ソース等）に依存し、
+// Evidence link で signalStats が増えれば、同じ素点でも gate 判定が変わる（§9.5/§9.6: 即更新）。
+// DOM/インタラクション非依存方針のため、UI の reloadSignal 効果そのものではなく、それが依拠する
+// 「link → 同一素点での再計算 → gate 反映」のデータ経路を fetcher DI で end-to-end に検証する。
+describe("task-22 Phase 2: Candidate 側 link 後に進級可否（gate）が更新される", () => {
+  /**
+   * signalStats を持つ擬似 API。POST link-candidate で distinct ソース数を増やし、
+   * POST scoring/initial は現在の distinct 数から gate.pass を決める（distinct ≥ 2 で通過）。
+   * 実 API（route.ts）の「gate は signalStats 依存」という契約を最小に模す。
+   */
+  function makeStatefulApi(initialDistinct: number) {
+    let distinct = initialDistinct;
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (url.includes("/link-candidate")) {
+        distinct += 1; // 別 sourceType の Evidence を link → distinct ソースが増える。
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            data: {
+              evidence: { id: "e1", evidenceType: "search", strength: 4, credibility: 3 },
+              stats: {
+                distinctSourceTypes: distinct,
+                avgStrength: 4,
+                hasDirectSpend: true,
+                strongSignalTypes: ["spend", "search"],
+              },
+            },
+          }),
+        } as unknown as Response;
+      }
+      // scoring/initial: gate は現在の distinct 数から決まる（素点ではなく signalStats 依存）。
+      void init;
+      const pass = distinct >= 2;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            candidate: { id: "c1" },
+            initialScore: 80,
+            confidence: 0.7,
+            gate: {
+              pass,
+              reasons: pass ? [] : ["独立チャネル数が不足（1 < 必要 2）"],
+            },
+          },
+        }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    return { fetcher };
+  }
+
+  it("link 前は gate 未通過、link 後に同じ素点で再計算すると gate が通過に変わる", async () => {
+    const { fetcher } = makeStatefulApi(1); // 初期は distinct 1（独立チャネル不足）。
+    const inputs = { spend: 5, dissatisfaction: 4 };
+
+    // 1) 採点 → distinct 1 のため gate 未通過。
+    const before = await submitScoring("c1", inputs, fetcher);
+    expect(before.gate.pass).toBe(false);
+    expect(before.gate.reasons.join("")).toContain("独立チャネル");
+
+    // 2) 别 sourceType の Evidence を link（distinct 1 → 2）。
+    const params: LinkParams = {
+      rawSignalId: "r1",
+      candidateId: "c1",
+      evidenceType: "search",
+      strength: 4,
+      credibility: 3,
+    };
+    const linked = await submitLink(params, fetcher);
+    expect(linked.stats.distinctSourceTypes).toBe(2);
+
+    // 3) link 後に「同じ素点」で再計算 → signalStats が増えたため gate が通過に変わる。
+    const after = await submitScoring("c1", inputs, fetcher);
+    expect(after.gate.pass).toBe(true);
+    expect(after.gate.reasons).toEqual([]);
+
+    // 進級可否の描画も更新後の gate を反映する（未通過→通過）。
+    expect(renderToStaticMarkup(<ScoringResultView result={after} />)).toContain("通過");
   });
 });
 

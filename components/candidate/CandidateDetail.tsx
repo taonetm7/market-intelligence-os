@@ -248,6 +248,9 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
   const [rejectOpen, setRejectOpen] = useState(false);
   // Evidence link UI（task-22 导线B）の開閉。
   const [linkOpen, setLinkOpen] = useState(false);
+  // link で signalStats が変わったことを ScoringPanel に伝える信号。+1 のたびに、採点済みなら
+  // gate/confidence を同じ素点で再計算させ進級可否を即更新する（§9.5/§9.6）。
+  const [scoringReload, setScoringReload] = useState(0);
   const guardRef = useRef(createLatestGuard());
 
   const load = useCallback(async () => {
@@ -320,12 +323,18 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
     setLinkOpen(true);
   }, []);
 
-  // link 成功 → 通知して候補・Evidence を取り直す（signalStats / 進級可否が即更新される §9.6）。
+  // link 成功 → 通知して候補・Evidence を取り直す。さらに scoringReload を進め、採点済みなら
+  // ScoringPanel に gate/confidence を再計算させて進級可否を即更新する（§9.5/§9.6）。
   const handleLinked = useCallback(() => {
     setLinkOpen(false);
     setNotice("Raw Signal を Evidence として link しました");
     void load();
+    setScoringReload((n) => n + 1);
   }, [load]);
+
+  // 採点（保存して計算・link 後の再計算）成功時に候補を取り直し、stage/score/confidence を反映する。
+  // ScoringPanel の reloadSignal 再計算が安定して走るよう、参照を固定する（load は安定）。
+  const handleScored = useCallback(() => void load(), [load]);
 
   // 昇格できるのは normalized の候補のみ（§8.9。Slice 1 は normalized→top100）。
   const canPromote = candidate?.stage === "normalized";
@@ -387,7 +396,8 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
             <ScoringPanel
               candidateId={candidate.id}
               initialValues={candidate.initialInputs ?? undefined}
-              onScored={() => void load()}
+              onScored={handleScored}
+              reloadSignal={scoringReload}
             />
           </div>
         </>

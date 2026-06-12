@@ -116,11 +116,21 @@ export async function submitRawSignal(
   if (!validated.ok) {
     return { ok: false, errors: validated.errors };
   }
-  const res = await fetcher("/api/raw-signals", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(validated.input),
-  });
+  // ネットワーク層は throw（接続失敗・タイムアウト等）し得るため catch し、
+  // 入力を保持したまま再試行できるインラインエラーへ変換する（指摘2）。
+  let res: Response;
+  try {
+    res = await fetcher("/api/raw-signals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validated.input),
+    });
+  } catch {
+    return {
+      ok: false,
+      errors: { rawText: "通信に失敗しました。接続を確認して再試行してください" },
+    };
+  }
   if (!res.ok) {
     return { ok: false, errors: { rawText: "保存に失敗しました。時間をおいて再試行してください" } };
   }
@@ -150,6 +160,15 @@ export function QuickCapture({ onSaved }: QuickCaptureProps) {
 
   function update<K extends keyof QuickCaptureFields>(key: K, value: string) {
     setFields((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function handleRawTextKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // textarea では Enter=改行（本文に改行を入れられるようにする）。
+    // 送信は Cmd/Ctrl+Enter（＋保存ボタン）でキーボード完結を維持する。
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -200,11 +219,15 @@ export function QuickCapture({ onSaved }: QuickCaptureProps) {
 
       <label style={FIELD_STYLE}>
         <span style={LABEL_STYLE}>本文 / 観測内容（必須）</span>
-        <Input
+        <textarea
+          className="mi-input"
+          rows={3}
           value={fields.rawText}
           onChange={(e) => update("rawText", e.target.value)}
-          placeholder="観測したことを 1 行で"
+          onKeyDown={handleRawTextKeyDown}
+          placeholder="観測した事実を記入（改行可。Cmd/Ctrl+Enter で保存）"
           aria-invalid={errors.rawText ? true : undefined}
+          style={{ resize: "vertical", fontFamily: "inherit" }}
         />
         {errors.rawText ? (
           <span role="alert" style={ERROR_STYLE}>

@@ -65,6 +65,11 @@ describe("QuickCapture: 入力組立", () => {
     });
   });
 
+  it("rawText の改行を保持する（複数行の観測本文）", () => {
+    const input = buildRawSignalInput(validFields({ rawText: "1行目\n2行目\n3行目" }));
+    expect(input.rawText).toBe("1行目\n2行目\n3行目");
+  });
+
   it("URL・観測対象・詳細項目は非空のときだけ含める", () => {
     const input = buildRawSignalInput(
       validFields({ country: "JP", observedPrice: "¥980", note: "メモ" }),
@@ -140,6 +145,21 @@ describe("QuickCapture: 送信", () => {
       ({ ok: false, status: 500, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
     const result = await submitRawSignal(validFields(), failing);
     expect(result.ok).toBe(false);
+  });
+
+  it("fetch が throw（通信エラー）してもインラインエラーに変換し、件数は増えない", async () => {
+    const calls: number[] = [];
+    const throwing = (async () => {
+      calls.push(1);
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const result = await submitRawSignal(validFields(), throwing);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // 入力保持のまま再試行案内（インラインエラー）。
+      expect(result.errors.rawText).toBeTruthy();
+    }
+    expect(calls).toHaveLength(1);
   });
 });
 

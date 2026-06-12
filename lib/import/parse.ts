@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 
+import { rawSignalInputSchema } from "../validation/schemas";
 import {
   importEnvelopeSchema,
   rawSignalImportSchema,
@@ -23,8 +24,10 @@ export type InvalidRow = {
   /**
    * 1 始まりの行番号。
    * - JSON: `rawSignals[]` 内の位置（1 = 先頭要素）。
-   * - CSV: ファイル行番号（ヘッダ = 1 行目。データは 2 行目から）。
-   * - `0`: 行を特定できない全体エラー（JSON 解釈不能 / エンベロープ不正 / 空 CSV）。
+   * - CSV: **物理ファイル行番号**（ヘッダ = 1 行目。引用符内改行も 1 行として数える＝
+   *   先行レコードが複数物理行にまたがっても後続行の番号がズレない）。
+   * - `0`: 行を特定できない全体エラー（JSON 解釈不能 / エンベロープ不正 / 空 CSV /
+   *   固定ヘッダ不一致）。
    */
   row: number;
   errors: string[];
@@ -41,6 +44,18 @@ const NUMERIC_CSV_COLUMNS = new Set(["observedRating", "observedReviews"]);
 
 /** CSV の `tags` 列の区切り文字（§10.1 / task-14: セミコロン区切り → 配列）。 */
 const CSV_TAGS_DELIMITER = ";";
+
+/**
+ * 固定ヘッダ CSV で許容する列名の集合。
+ * task-02 の `rawSignalInputSchema` の入力キーから導出し（重複定義しない）、
+ * import 形の別名だけ寄せる: 内部 `signalTags` は CSV では `tags`（§10.1）。
+ * ここに無い列名（typo・未知列）はヘッダ不一致として検出する。
+ */
+const ALLOWED_CSV_COLUMNS = new Set(
+  Object.keys(rawSignalInputSchema.shape).map((key) =>
+    key === "signalTags" ? "tags" : key,
+  ),
+);
 
 /** ZodError を `"path: message"` 形式の文字列配列へ変換する（quarantine 表示用）。 */
 function zodMessages(error: z.ZodError): string[] {
@@ -103,17 +118,26 @@ export function parseJson(input: string | unknown): ParseResult {
   return validateRows(envelope.data.rawSignals, (index) => index + 1);
 }
 
+/** トークナイズ済み 1 レコード。`line` は 1 始まりの物理ファイル行（レコード開始位置）。 */
+type CsvRecord = { line: number; cols: string[] };
+
 /**
  * RFC4180 風の最小 CSV トークナイザ（純粋）。引用符（`"`）で囲んだフィールド内の
  * カンマ・改行・二重引用符（`""` エスケープ）を解釈する。依存追加はしない（zod のみ方針）。
  * 末尾改行は空行として残さない。
+ *
+ * 各レコードに**開始物理行番号**を付与する。引用符内改行はレコードを区切らないが物理行は
+ * 進めて数えるため、複数物理行にまたがるレコードがあっても後続レコードの行番号がズレない
+ * （quarantine 表示でユーザーがファイル該当行を特定できるようにするため）。
  */
-function tokenizeCsv(text: string): string[][] {
-  const rows: string[][] = [];
+function tokenizeCsv(text: string): CsvRecord[] {
+  const records: CsvRecord[] = [];
   let row: string[] = [];
   let field = "";
   let inQuotes = false;
   let fieldStarted = false;
+  let lineNo = 1; // 現在処理中の物理行。
+  let recordStartLine = 1; // いま組み立て中レコードの開始物理行。
 
   const endField = () => {
     row.push(field);
@@ -122,7 +146,7 @@ function tokenizeCsv(text: string): string[][] {
   };
   const endRow = () => {
     endField();
-    rows.push(row);
+    records.push({ line: recordStartLine, cols: row });
     row = [];
   };
 
@@ -138,6 +162,9 @@ function tokenizeCsv(text: string): string[][] {
           inQuotes = false;
         }
       } else {
+        if (char === "\n") {
+          lineNo += 1; // 引用符内改行：物理行は進むがレコードは継続。
+        }
         field += char;
       }
       continue;
@@ -151,6 +178,8 @@ function tokenizeCsv(text: string): string[][] {
       fieldStarted = true;
     } else if (char === "\n") {
       endRow();
+      lineNo += 1;
+      recordStartLine = lineNo; // 次レコードは次の物理行から始まる。
     } else if (char === "\r") {
       // CRLF の CR は無視（次の \n で行確定）。
     } else {
@@ -164,7 +193,7 @@ function tokenizeCsv(text: string): string[][] {
     endRow();
   }
 
-  return rows;
+  return records;
 }
 
 /**
@@ -213,7 +242,10 @@ function csvRowToObject(header: string[], cols: string[]): Record<string, unknow
  * 2 行目以降を 1 件ずつ検証する。`tags` はセミコロン区切り → 配列。
  *
  * - 空入力（ヘッダすら無い）→ 全体エラー（row=0）。
- * - 不正行は invalid に残す（row = ファイル行番号。ヘッダが 1 行目なのでデータは 2 行目から）。
+ * - 固定ヘッダ不一致（未知列 / typo）→ 全体エラー（row=0）。黙って欠落させない（§10.1
+ *   「固定ヘッダ CSV」。例: `observedEntiy` の typo を見逃さない）。
+ * - 不正行は invalid に残す（row = 物理ファイル行番号。引用符内改行を含む先行レコードが
+ *   あっても物理行に揃う）。
  */
 export function parseCsv(input: string): ParseResult {
   const records = tokenizeCsv(input);
@@ -221,10 +253,25 @@ export function parseCsv(input: string): ParseResult {
     return { valid: [], invalid: [{ row: 0, errors: ["CSV が空です"] }] };
   }
 
-  const header = records[0].map((name) => name.trim());
-  const dataRows = records.slice(1);
-  const objects = dataRows.map((cols) => csvRowToObject(header, cols));
+  const header = records[0].cols.map((name) => name.trim());
 
-  // CSV はヘッダが 1 行目。データ行 index 0 はファイル 2 行目。
-  return validateRows(objects, (index) => index + 2);
+  // 固定ヘッダ検証: 許容列に無いヘッダ（typo・未知列）はヘッダ不一致として弾く。
+  const unknownColumns = header.filter((name) => !ALLOWED_CSV_COLUMNS.has(name));
+  if (unknownColumns.length > 0) {
+    return {
+      valid: [],
+      invalid: [
+        {
+          row: 0,
+          errors: [`固定ヘッダと不一致な列があります: ${unknownColumns.join(", ")}`],
+        },
+      ],
+    };
+  }
+
+  const dataRecords = records.slice(1);
+  const objects = dataRecords.map((record) => csvRowToObject(header, record.cols));
+
+  // 行番号はトークナイザが付与した物理ファイル行を用いる。
+  return validateRows(objects, (index) => dataRecords[index].line);
 }

@@ -188,4 +188,35 @@ describe("parseCsv", () => {
     expect(result.invalid).toHaveLength(1);
     expect(result.invalid[0]?.row).toBe(0);
   });
+
+  // Codexレビュー指摘1: 引用符内改行を含む先行レコードで後続 invalid.row が物理行とズレない。
+  it("引用符内改行を含むレコードの後でも invalid.row を物理ファイル行に揃える", () => {
+    const csv = [
+      header, // line 1
+      '"review","A",,"1行目\n2行目",,t,1', // lines 2-3（引用符内改行）→ valid
+      "blog,B,,本文,,t,2", // line 4 → invalid（enum）
+    ].join("\n");
+
+    const result = parseCsv(csv);
+
+    expect(result.valid).toHaveLength(1);
+    expect(result.invalid).toHaveLength(1);
+    // 引用符内改行で物理行が 1 つ下にずれるため、不正行はファイル 4 行目。
+    expect(result.invalid[0]?.row).toBe(4);
+    expect(result.invalid[0]?.errors.join(" ")).toContain("sourceType");
+  });
+
+  // Codexレビュー指摘2: 固定ヘッダ不一致（typo / 未知列）を黙って欠落させず明示検出する。
+  it("固定ヘッダと不一致な列（typo）は全体エラー（row=0）として弾く", () => {
+    // observedEntity の typo。従来は黙って strip され値が欠落していた。
+    const badHeader = "sourceType,sourceName,sourceUrl,rawText,observedEntiy,tags";
+    const csv = [badHeader, "review,App Store,,本文,○○ App,localization"].join("\n");
+
+    const result = parseCsv(csv);
+
+    expect(result.valid).toEqual([]);
+    expect(result.invalid).toHaveLength(1);
+    expect(result.invalid[0]?.row).toBe(0);
+    expect(result.invalid[0]?.errors.join(" ")).toContain("observedEntiy");
+  });
 });

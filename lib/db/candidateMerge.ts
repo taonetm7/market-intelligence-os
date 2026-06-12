@@ -6,8 +6,11 @@
 // merge:
 //   吸収側 Candidate の Evidence / ScoreSnapshot / DecisionLog を生存側へ **re-parent**
 //   し、吸収側を `stage=archived` にする。両者に DecisionLog(merge, relatedCandidateId)
-//   を刻む。Evidence は `@@unique([candidateId, rawSignalId, evidenceType])` を持つため、
-//   生存側に同一キーの証拠が既にある場合は移送せず吸収側の重複を破棄する（片方を残す）。
+//   を刻む。ただし re-parent する DecisionLog からは decisionType=merge のログを除外する
+//   ——merge ログは「その候補で統合イベントが起きた」固有の履歴なので吸収側に残す。これ
+//   が無いと連鎖統合（C→B 後に B→A）で B の merge ログが A へ移り誤配置される。Evidence
+//   は `@@unique([candidateId, rawSignalId, evidenceType])` を持つため、生存側に同一キー
+//   の証拠が既にある場合は移送せず吸収側の重複を破棄する（片方を残す）。
 //
 // split:
 //   元候補の複製を 1 件生成し、指定した Evidence だけを新候補へ移す。元候補に
@@ -31,7 +34,7 @@
 
 import { type PrismaClient } from "@prisma/client";
 
-import { type Stage } from "../validation/enums";
+import { decisionTypeSchema, type Stage } from "../validation/enums";
 import { prisma } from "./client";
 import { log } from "./decisionLogRepo";
 import { nextCandidateDisplayId } from "./displayId";
@@ -140,13 +143,19 @@ export async function merge(args: MergeArgs, db: CandidateMergeDb = prisma): Pro
       }
     }
 
-    // ScoreSnapshot / DecisionLog は unique 制約が無いため一括で再親付けできる。
+    // ScoreSnapshot は unique 制約が無いため一括で再親付けできる。
     const snapshots = await tx.scoreSnapshot.updateMany({
       where: { candidateId: absorbedId },
       data: { candidateId: survivorId },
     });
+    // DecisionLog も再親付けするが、decisionType=merge のログは除外する。merge ログは
+    // 「その候補で統合イベントが起きた」固有の履歴（自分が何かを吸収した／自分が吸収され
+    // archived になった）であり、生存側へ移すと連鎖統合（C→B 後に B→A）で「A が C を
+    // 吸収した」と誤配置される。吸収側の merge ログは吸収側に残す（enum 値は task-02 の
+    // スキーマ経由で参照し直書きを避ける）。promote / demote / reject / hold / split など
+    // の判断ログは、吸収側の中身が生存側へ集約されるのに合わせて移送する。
     const logs = await tx.decisionLog.updateMany({
-      where: { candidateId: absorbedId },
+      where: { candidateId: absorbedId, decisionType: { not: decisionTypeSchema.enum.merge } },
       data: { candidateId: survivorId },
     });
 

@@ -167,6 +167,38 @@ describe("candidateMerge.merge", () => {
     );
     expect(spendForShared).toHaveLength(1);
   });
+
+  it("keeps the absorbed candidate's own merge log on chained merges (does not re-parent merge logs)", async () => {
+    // 連鎖統合の回帰テスト（Codex 指摘）。まず C を B へ統合（B 生存）、続いて B を A へ
+    // 統合する。B が「C を吸収した」merge ログは B 固有の履歴であり、B→A merge で A へ
+    // 再親付けされてはならない（さもないと「A が C を吸収した」と誤って読めてしまう）。
+    const a = await candidateRepo.create(candidateFixture({ title: "A" }), db);
+    const b = await candidateRepo.create(candidateFixture({ title: "B" }), db);
+    const c = await candidateRepo.create(candidateFixture({ title: "C" }), db);
+
+    // 1回目: C を B へ統合。B に merge ログ(related=C) が刻まれる。
+    await candidateMerge.merge({ survivorId: b.id, absorbedId: c.id, reason: "C を B へ統合" }, db);
+    const bMergeWithC = (await decisionLogRepo.listByCandidate(b.id, db)).filter(
+      (l) => l.decisionType === "merge" && l.relatedCandidateId === c.id,
+    );
+    expect(bMergeWithC).toHaveLength(1);
+
+    // 2回目: B を A へ統合。
+    await candidateMerge.merge({ survivorId: a.id, absorbedId: b.id, reason: "B を A へ統合" }, db);
+
+    // A の merge ログは今回の統合(related=B)のみ。過去の B↔C 統合(related=C)は紛れ込まない。
+    const aMergeRelated = (await decisionLogRepo.listByCandidate(a.id, db))
+      .filter((l) => l.decisionType === "merge")
+      .map((l) => l.relatedCandidateId);
+    expect(aMergeRelated).toContain(b.id);
+    expect(aMergeRelated).not.toContain(c.id);
+
+    // B が C を吸収した履歴は B に残る（再親付けされない）。
+    const bMergeWithCAfter = (await decisionLogRepo.listByCandidate(b.id, db)).filter(
+      (l) => l.decisionType === "merge" && l.relatedCandidateId === c.id,
+    );
+    expect(bMergeWithCAfter).toHaveLength(1);
+  });
 });
 
 describe("candidateMerge.split", () => {

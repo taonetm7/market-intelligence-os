@@ -82,6 +82,20 @@ export class QuarantineInvalidRowError extends Error {
   }
 }
 
+/**
+ * 既に accepted 済みの行を rowIds で明示 accept しようとしたときに投げる明示エラー
+ * （Codex 指摘1: 再 accept を成功扱いにしない。route 側で 409 に翻訳する）。
+ * 注意: rowIds 省略の「pending 全行 accept」は冪等な利便機能なのでこのエラーは投げない
+ * （pending だけを対象にするため、accepted 行は元々対象外）。本エラーは「この行を本登録せよ」
+ * と明示指定したのに既に本登録済み、という矛盾要求だけを弾く。
+ */
+export class QuarantineAlreadyAcceptedError extends Error {
+  constructor(public readonly rowIds: string[]) {
+    super(`既に本登録済みの隔離行は再 accept できません: ${rowIds.join(", ")}`);
+    this.name = "QuarantineAlreadyAcceptedError";
+  }
+}
+
 /** バッチ / 行が見つからないときの明示エラー（route 側で 404 に翻訳する）。 */
 export class QuarantineNotFoundError extends Error {
   constructor(message: string) {
@@ -121,9 +135,11 @@ export async function createBatchFromParse(
   });
 
   // valid 行: payload の origin を batch の origin に揃える（本登録時の来歴を確定）。
-  const validData = parsed.valid.map((payload, index) => ({
+  // rowNumber は parse が付けた元入力行番号を使う（valid 配列順ではなく、invalid 混在時も
+  // 元ファイル/入力と突合できる・Codex 指摘3）。row は payload から外して本体に混ぜない。
+  const validData = parsed.valid.map(({ row, ...payload }) => ({
     batchId: batch.id,
-    rowNumber: index + 1,
+    rowNumber: row,
     status: "pending",
     payloadJson: serializeJsonField({ ...payload, origin } satisfies RawSignalInput),
   }));
@@ -189,6 +205,15 @@ export async function listQuarantine(
  * auto-snapshot（v2 §18.4 最小実装）: accept 前後の RawSignal 総件数を記録して返す。
  * 各行の本登録は rawSignalRepo.create（task-08）に委ね、成功後に行を accepted へ遷移し
  * rawSignalId を記録する（本登録の証跡）。
+ *
+ * 原子性（Codex 指摘2）: rawSignalRepo.create は内部で自前の $transaction を張るため
+ * 外側の対話的トランザクションにネストできず（Prisma の TransactionClient は $transaction を
+ * 持たない）、また repo の API は変更しない制約がある。そこで repo API を変えない範囲で
+ * 「本登録 → 行更新」を best-effort に原子化する:
+ *  - 行更新は updateMany の where に status:"pending" を含め、並行 accept 等で既に pending で
+ *    なくなっていれば 0 件更新として検出する（重複本登録を防ぐ並行ガード）。
+ *  - 更新が 0 件 / 例外のときは、直前に作成した RawSignal を補償削除し、「RawSignal だけ存在し
+ *    行は pending のまま」という不整合を残さない。
  */
 export async function accept(
   batchId: string,
@@ -223,7 +248,17 @@ export async function accept(
     throw new QuarantineInvalidRowError(invalidTargets.map((r) => r.id));
   }
 
-  // pending のみ本登録（accepted は冪等にスキップ）。
+  // 明示 rowIds で accepted 済みの行を指定したら矛盾要求として弾く（Codex 指摘1）。
+  // rowIds 省略時の「pending 全行 accept」は冪等な利便機能なのでこの検査はしない
+  // （pending だけが対象となり accepted 行は元々除外される）。
+  if (rowIds !== undefined) {
+    const acceptedTargets = targets.filter((r) => r.status === "accepted");
+    if (acceptedTargets.length > 0) {
+      throw new QuarantineAlreadyAcceptedError(acceptedTargets.map((r) => r.id));
+    }
+  }
+
+  // pending のみ本登録。
   const pendingTargets = targets.filter((r) => r.status === "pending");
 
   // auto-snapshot（§18.4 最小実装）: 本登録前の総件数を記録。
@@ -233,10 +268,26 @@ export async function accept(
   for (const row of pendingTargets) {
     const payload = JSON.parse(row.payloadJson ?? "{}") as RawSignalInput;
     const rawSignal = await rawSignalRepo.create(payload, db);
-    await db.quarantineRow.update({
-      where: { id: row.id },
-      data: { status: "accepted", rawSignalId: rawSignal.id },
-    });
+
+    // 行更新（pending → accepted）。並行ガードとして where に status:"pending" を含める。
+    // 例外/0 件更新時は作成済み RawSignal を補償削除し不整合を残さない（Codex 指摘2）。
+    let updatedCount: number;
+    try {
+      const res = await db.quarantineRow.updateMany({
+        where: { id: row.id, status: "pending" },
+        data: { status: "accepted", rawSignalId: rawSignal.id },
+      });
+      updatedCount = res.count;
+    } catch (error) {
+      await rawSignalRepo.delete(rawSignal.id, db);
+      throw error;
+    }
+    if (updatedCount === 0) {
+      // 並行して既に accept 済み等で pending でなくなっていた → 重複本登録を取り消す。
+      await rawSignalRepo.delete(rawSignal.id, db);
+      continue;
+    }
+
     accepted.push({ row: { ...row, status: "accepted", rawSignalId: rawSignal.id }, rawSignal });
   }
 

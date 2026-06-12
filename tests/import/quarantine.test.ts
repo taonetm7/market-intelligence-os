@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { parseJson } from "../../lib/import/parse";
 import {
+  QuarantineAlreadyAcceptedError,
   QuarantineInvalidRowError,
   QuarantineNotFoundError,
   quarantineRepo,
@@ -72,6 +73,32 @@ function mixedParse() {
   });
 }
 
+// 行更新（quarantineRow.updateMany）だけが必ず失敗する PrismaClient ラッパ。
+// accept の「本登録 → 行更新」のうち行更新が落ちたとき、作成済み RawSignal が補償削除され
+// 不整合（RawSignal だけ残る）が起きないことを検証するために使う（Codex 指摘2）。
+function withFailingRowUpdate(real: PrismaClient): PrismaClient {
+  return new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop === "quarantineRow") {
+        const qr = target.quarantineRow;
+        return new Proxy(qr, {
+          get(t, p) {
+            if (p === "updateMany") {
+              return async () => {
+                throw new Error("simulated quarantineRow.updateMany failure");
+              };
+            }
+            const value = Reflect.get(t, p);
+            return typeof value === "function" ? value.bind(t) : value;
+          },
+        });
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 describe("createBatchFromParse（import → quarantine）", () => {
   it("valid 行は pending、invalid 行は invalid として隔離される（本登録はされない）", async () => {
     const result = await quarantineRepo.createBatchFromParse(
@@ -95,6 +122,20 @@ describe("createBatchFromParse（import → quarantine）", () => {
 
     // この時点では RawSignal は 1 件も本登録されていない（即本登録しない・§10.1 step4）。
     expect(await db.rawSignal.count()).toBe(0);
+  });
+
+  it("pending 行の rowNumber は元入力行を保持する（invalid 混在でズレない・Codex 指摘3）", async () => {
+    // mixedParse: row1 valid / row2 invalid / row3 valid。
+    const result = await quarantineRepo.createBatchFromParse(
+      mixedParse(),
+      { format: "json" },
+      db,
+    );
+
+    // pending は元入力の 1 行目と 3 行目（valid 配列順の 1,2 ではない）。
+    expect(result.pending.map((r) => r.rowNumber).sort((a, b) => a - b)).toEqual([1, 3]);
+    // invalid は元入力の 2 行目。
+    expect(result.invalid[0]?.rowNumber).toBe(2);
   });
 
   it("origin=ai のバッチは valid payload の origin を ai に焼き込む（§11.2）", async () => {
@@ -203,6 +244,42 @@ describe("accept（quarantine → RawSignal 本登録）", () => {
     const second = await quarantineRepo.accept(batch.batch.id, undefined, db);
     expect(second.accepted).toHaveLength(0);
     expect(await db.rawSignal.count()).toBe(1);
+  });
+
+  it("accepted 済み行を rowIds で明示 accept すると QuarantineAlreadyAcceptedError（再登録されない）", async () => {
+    const batch = await quarantineRepo.createBatchFromParse(
+      parseJson({ rawSignals: [validSignal()] }),
+      { format: "json" },
+      db,
+    );
+    const [pending] = batch.pending;
+    await quarantineRepo.accept(batch.batch.id, [pending.id], db);
+    expect(await db.rawSignal.count()).toBe(1);
+
+    // 同じ行を再度 rowIds で指定 → 矛盾要求として弾かれ、二重本登録は起きない（Codex 指摘1）。
+    await expect(
+      quarantineRepo.accept(batch.batch.id, [pending.id], db),
+    ).rejects.toBeInstanceOf(QuarantineAlreadyAcceptedError);
+    expect(await db.rawSignal.count()).toBe(1);
+  });
+
+  it("本登録後の行更新が失敗したら作成済み RawSignal を補償削除して不整合を残さない", async () => {
+    const batch = await quarantineRepo.createBatchFromParse(
+      parseJson({ rawSignals: [validSignal()] }),
+      { format: "json" },
+      db,
+    );
+
+    // 行更新だけが必ず落ちる db で accept → 例外が伝播する。
+    await expect(
+      quarantineRepo.accept(batch.batch.id, undefined, withFailingRowUpdate(db)),
+    ).rejects.toThrow();
+
+    // 補償削除により RawSignal は残らず、行も pending のまま（"RawSignal だけ存在" を防ぐ）。
+    expect(await db.rawSignal.count()).toBe(0);
+    const view = (await quarantineRepo.listQuarantine(batch.batch.id, db))[0];
+    expect(view.pending).toHaveLength(1);
+    expect(view.accepted).toHaveLength(0);
   });
 });
 

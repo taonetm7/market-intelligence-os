@@ -8,6 +8,7 @@
 // - ZodError（不正入力）                 → 400（issues 付き）
 // - QuarantineNotFoundError（batch/行不在）→ 404
 // - QuarantineInvalidRowError（invalid を accept）→ 409
+// - QuarantineAlreadyAcceptedError（再 accept）   → 409
 // - それ以外                            → 500
 //
 // 返却は既存 API と同じ { data } / { error } 一貫形。成功は 201 で
@@ -18,6 +19,7 @@
 import { z } from "zod";
 
 import {
+  QuarantineAlreadyAcceptedError,
   QuarantineInvalidRowError,
   QuarantineNotFoundError,
   quarantineRepo,
@@ -45,6 +47,12 @@ function errorResponse(error: unknown): Response {
   if (error instanceof QuarantineInvalidRowError) {
     return Response.json(
       { error: { message: "invalid な隔離行は本登録できません", rowIds: error.rowIds } },
+      { status: 409 },
+    );
+  }
+  if (error instanceof QuarantineAlreadyAcceptedError) {
+    return Response.json(
+      { error: { message: "既に本登録済みの隔離行は再 accept できません", rowIds: error.rowIds } },
       { status: 409 },
     );
   }

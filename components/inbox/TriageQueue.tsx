@@ -85,10 +85,45 @@ export type PromoteResult = {
 };
 
 /**
+ * link 失敗時の補償: 作成したばかりの Candidate を退役させる
+ * （DELETE /api/candidates/[id] = ソフト退役 stage=archived。hard delete はしない §7.3/§15.1）。
+ * 退役できれば孤児 Candidate がアクティブに残らず、ユーザーが再試行しても重複が増えない。
+ * 退役自体（DELETE）が失敗した場合は false を返し、呼び出し側が手動確認を促すメッセージを出す。
+ */
+async function archiveOrphanCandidate(id: string, fetcher: typeof fetch): Promise<boolean> {
+  try {
+    const res = await fetcher(`/api/candidates/${id}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** link 失敗時の通知文。補償（退役）の成否で文言を変え、再試行の可否を明示する。 */
+function buildOrphanMessage(
+  label: string,
+  status: number | undefined,
+  rolledBack: boolean,
+): string {
+  const head = status
+    ? `候補への紐付けに失敗しました（${status}）`
+    : "候補への紐付けに失敗しました";
+  return rolledBack
+    ? `${head}。作成した候補 ${label} は退役（archived）させたため重複は残りません。再試行できます。`
+    : `${head}。作成した候補 ${label} の退役にも失敗しました。重複を避けるため、再試行前に候補 ${label} の状態を手動で確認してください。`;
+}
+
+/**
  * 新規候補化: Candidate を作成（task-13 POST /api/candidates）し、元の Raw Signal を
  * その場で Evidence として link する（task-12 POST /api/raw-signals/[id]/link-candidate）。
  * link 成功で Raw Signal は Evidence 1 件以上となり、次回取得でキューから外れる。
- * いずれかの API 失敗は throw（呼び出し側でインライン通知へ変換）。
+ *
+ * 「作成 → 即 link」は一括操作。link が失敗すると作成済み Candidate が孤児として残り、
+ * Raw Signal はキューに残るため、素朴に再試行すると重複 Candidate が増え続ける。そこで
+ * link 失敗時は作成した Candidate を退役（補償）してから throw し、孤児をアクティブに残さない。
  */
 export async function promoteToCandidate(
   signal: TriageSignal,
@@ -104,20 +139,34 @@ export async function promoteToCandidate(
     createRes,
     "候補の作成に失敗しました",
   );
+  const label = candidate.displayId ?? candidate.id;
 
   // 2) 元 Raw Signal を即 link（初期 Evidence。type/strength は後段で再設定）。
-  const linkRes = await fetcher(`/api/raw-signals/${signal.id}/link-candidate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      candidateId: candidate.id,
-      evidenceType: PROMOTE_EVIDENCE_TYPE,
-      strength: PROMOTE_STRENGTH,
-    }),
-  });
-  const linked = await readData<{ evidence: unknown }>(linkRes, "候補への紐付けに失敗しました");
+  //    readData は !ok で即 throw するため、link はここで手動判定し、失敗なら補償を挟む。
+  let linkRes: Response;
+  try {
+    linkRes = await fetcher(`/api/raw-signals/${signal.id}/link-candidate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: candidate.id,
+        evidenceType: PROMOTE_EVIDENCE_TYPE,
+        strength: PROMOTE_STRENGTH,
+      }),
+    });
+  } catch {
+    // ネットワーク等で link 呼び出し自体が投げた場合も、作成済み Candidate を補償退役する。
+    const rolledBack = await archiveOrphanCandidate(candidate.id, fetcher);
+    throw new Error(buildOrphanMessage(label, undefined, rolledBack));
+  }
 
-  return { candidate, evidence: linked.evidence };
+  if (!linkRes.ok) {
+    const rolledBack = await archiveOrphanCandidate(candidate.id, fetcher);
+    throw new Error(buildOrphanMessage(label, linkRes.status, rolledBack));
+  }
+
+  const body = (await linkRes.json()) as { data?: { evidence: unknown } };
+  return { candidate, evidence: body.data?.evidence };
 }
 
 const EMPTY_STYLE = { padding: "24px 0", color: "#667085", fontSize: 14 } as const;

@@ -44,10 +44,15 @@ function signal(overrides: Partial<TriageSignal> = {}): TriageSignal {
  * 「処理済みはキューから外れる」「新規候補化で即 link される」を E2E 的に検証できる。
  * store の各行は status と linked（Evidence 有無）を持ち、unlinked=1 は inbox かつ未 link のみ返す。
  */
-function makeFakeApi(initial: TriageSignal[]) {
+function makeFakeApi(
+  initial: TriageSignal[],
+  options: { failLink?: boolean; failDelete?: boolean } = {},
+) {
   const store: TriageSignal[] = initial.map((s) => ({ ...s }));
   // link 済み（Evidence 1 件以上）の id。unlinked=1 はこれらを未処理から除外する。
   const linkedIds = new Set<string>();
+  // 補償退役（DELETE = ソフト退役）された Candidate の id。孤児が残らないことの検証に使う。
+  const archivedCandidateIds = new Set<string>();
   const calls: Array<{ url: string; method: string; body?: unknown }> = [];
   let candidateSeq = 0;
 
@@ -91,6 +96,14 @@ function makeFakeApi(initial: TriageSignal[]) {
     if (linkMatch && method === "POST") {
       const target = store.find((s) => s.id === linkMatch[1]);
       if (!target) return { ok: false, status: 404, json: async () => ({}) } as unknown as Response;
+      // link 失敗を注入（補償退役のテスト用）。失敗時は Evidence を付けない。
+      if (options.failLink) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: "link failed" }),
+        } as unknown as Response;
+      }
       linkedIds.add(target.id);
       return {
         ok: true,
@@ -99,10 +112,24 @@ function makeFakeApi(initial: TriageSignal[]) {
       } as unknown as Response;
     }
 
+    // 補償: DELETE /api/candidates/[id]（ソフト退役 stage=archived）。link 失敗時に呼ばれる。
+    const delMatch = /^\/api\/candidates\/([^/]+)$/.exec(url);
+    if (delMatch && method === "DELETE") {
+      if (options.failDelete) {
+        return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
+      }
+      archivedCandidateIds.add(delMatch[1]);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { id: delMatch[1], stage: "archived" } }),
+      } as unknown as Response;
+    }
+
     return { ok: false, status: 500, json: async () => ({}) } as unknown as Response;
   }) as unknown as typeof fetch;
 
-  return { store, calls, fetcher };
+  return { store, calls, fetcher, archivedCandidateIds };
 }
 
 describe("Inbox: 連番ガード（stale response 対策）", () => {
@@ -221,6 +248,31 @@ describe("Inbox: 新規候補化（Candidate 作成 → 即 link）", () => {
     await expect(promoteToCandidate(signal(), failing)).rejects.toThrow();
     // link-candidate は呼ばれない。
     expect(calls.some((u) => u.includes("link-candidate"))).toBe(false);
+  });
+
+  it("link 失敗時は作成済み Candidate を退役（DELETE で補償）し孤児を残さない", async () => {
+    // link を失敗させると、作成済みの cand-1 が孤児になる。補償で退役されることを検証。
+    const api = makeFakeApi([signal({ id: "rs1" })], { failLink: true });
+
+    await expect(promoteToCandidate(signal({ id: "rs1" }), api.fetcher)).rejects.toThrow(/退役/);
+
+    // 作成した候補に DELETE（ソフト退役）が飛ぶ＝孤児がアクティブに残らない。
+    const del = api.calls.find((c) => c.method === "DELETE");
+    expect(del?.url).toBe("/api/candidates/cand-1");
+    expect(api.archivedCandidateIds.has("cand-1")).toBe(true);
+
+    // raw signal は link されていないのでキューに残る（再試行は可能）。だが孤児候補は退役済み。
+    const rows = await fetchInboxQueue(api.fetcher);
+    expect(rows.map((r) => r.id)).toEqual(["rs1"]);
+  });
+
+  it("link も退役（DELETE）も失敗したら手動確認を促してthrowする", async () => {
+    const api = makeFakeApi([signal({ id: "rs1" })], { failLink: true, failDelete: true });
+
+    await expect(promoteToCandidate(signal({ id: "rs1" }), api.fetcher)).rejects.toThrow(/手動/);
+    // DELETE は試みられている（補償を試したが失敗した）。
+    expect(api.calls.some((c) => c.method === "DELETE")).toBe(true);
+    expect(api.archivedCandidateIds.size).toBe(0);
   });
 });
 

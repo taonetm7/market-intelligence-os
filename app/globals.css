@@ -49,10 +49,16 @@ a {
 }
 
 /* ---- task-16: app shell（最小・機能本位。美麗UIはやらない） ---- */
+/* shell は固定明色面（sidebar/button/modal 等）が多く、OS の dark scheme で
+   body の明色テキストを継承すると明地に明字となり破綻する。フル dark テーマは
+   スコープ外（spec §3.3）なので、shell 全体を一貫した可読ライト面に固定して
+   コントラストを保証する。light mode の表示は不変。 */
 .mi-app {
   display: flex;
   min-height: 100vh;
   width: 100%;
+  background: #fff;
+  color: #171717;
 }
 
 .mi-sidebar {
@@ -131,6 +137,7 @@ a {
   border-radius: 6px;
   border: 1px solid #ccc;
   background: #fff;
+  color: #171717;
   font-size: 13px;
   line-height: 1.4;
   cursor: pointer;
@@ -163,6 +170,8 @@ a {
   padding: 6px 10px;
   border: 1px solid #ccc;
   border-radius: 6px;
+  background: #fff;
+  color: #171717;
   font-size: 13px;
   width: 100%;
 }
@@ -236,6 +245,7 @@ a {
 
 .mi-modal__dialog {
   background: #fff;
+  color: #171717;
   border-radius: 8px;
   max-width: 480px;
   width: 100%;

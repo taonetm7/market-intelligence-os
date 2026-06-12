@@ -1,0 +1,72 @@
+{
+  "key": "sales-list",
+  "top100": "fail",
+  "failReason": "強シグナル（spend/dissatisfaction/search）が未成立（境界: スコアは足りるが需要の核が立っていない）",
+  "candidate": {
+    "problemFamily": "B2B営業の前準備",
+    "title": "B2B営業の リスト作成・初回アプローチ準備支援",
+    "targetUser": "小規模B2B企業・個人営業者",
+    "contextTrigger": "新規営業のたびにリスト作成と初回アプローチ準備に時間を使う",
+    "painStatement": "新規営業のためのリスト作成と初回アプローチ準備に毎週時間を使っている。今はスプレッドシート、人力検索、手入力で対応している。",
+    "currentSubstitute": "スプレッドシート／人力検索／手入力／業務委託",
+    "spendType": "outsourcing",
+    "monetizationGuess": "月額4,980円〜のB2B SaaS",
+    "productFormFit": ["B2B SaaS", "営業リスト補助", "AI要約/分類", "月額課金"],
+    "legalRisk": 2,
+    "opsRisk": 3,
+    "founderFit": 3,
+    "buildEase": 3,
+    "testableWithinDays": 14,
+    "testMethod": "1業種のリストを手動生成して提供し、継続利用の意思を確認する",
+    "nextAction": "求人/外注の発注を spend・dissatisfaction の一次証拠に落とし込めるか追加観測する"
+  },
+  "initialInputs": {
+    "spend": 3,
+    "dissatisfaction": 3,
+    "pain": 4,
+    "frequency": 4,
+    "discoverability": 3,
+    "substitute": 3,
+    "legalRisk": 2,
+    "opsRisk": 3
+  },
+  "rawSignals": [
+    {
+      "sourceType": "job",
+      "sourceName": "求人票（業務委託）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "複数の求人で、営業リスト作成・問い合わせフォーム送信・CRM入力・レポート作成の業務委託募集がある。",
+      "observedEntity": "営業事務／インサイドセールス支援",
+      "observedUpdate": "2026-05-27",
+      "signalTags": ["job", "outsourcing", "demand"]
+    },
+    {
+      "sourceType": "outsource",
+      "sourceName": "クラウドソーシング（営業リスト）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "営業リスト作成代行の発注が継続的に出ている。1案件あたりの単価は中程度。",
+      "observedEntity": "営業リスト作成代行",
+      "observedPrice": "¥4,980/月相当",
+      "observedUpdate": "2026-05-21",
+      "signalTags": ["outsourcing", "recurring"]
+    }
+  ],
+  "evidence": [
+    {
+      "rawSignal": 0,
+      "evidenceType": "job",
+      "strength": 4,
+      "credibility": 3,
+      "note": "求人での業務委託募集＝間接的な需要（まだ強シグナルではない）"
+    },
+    {
+      "rawSignal": 1,
+      "evidenceType": "outsourcing",
+      "strength": 3,
+      "credibility": 3,
+      "note": "代行発注は出ているが、製品への直接支出・不満・検索の核はこの時点では未確定"
+    }
+  ]
+}

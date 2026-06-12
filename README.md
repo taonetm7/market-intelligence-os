@@ -18,6 +18,16 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Seeding the database
+
+Populate the local SQLite database (`prisma/dev.db`) with the sample dataset (5 candidate examples with raw signals, evidence, and computed scores):
+
+```bash
+pnpm seed
+```
+
+The seed runner uses Node's built-in TypeScript execution, so **Node.js >= 22.9.0 is required** (it relies on `--experimental-transform-types`, added in 22.7.0, and `--env-file-if-exists`, added in 22.9.0). This is enforced via the `engines` field in `package.json`, and the `seed` script performs an up-front version check that exits with a clear message on older runtimes. The seed is idempotent — re-running it clears and re-inserts the data rather than duplicating it.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

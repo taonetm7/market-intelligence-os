@@ -1,0 +1,87 @@
+{
+  "key": "invoice",
+  "top100": "pass",
+  "candidate": {
+    "problemFamily": "請求書・証憑処理",
+    "title": "個人事業主向け 証憑保存・抜け漏れチェック（制度対応）",
+    "targetUser": "個人事業主・小規模事業者",
+    "contextTrigger": "インボイス制度・電子帳簿保存法対応で日々の保存と確認が必要",
+    "painStatement": "請求書・領収書・取引書類の保存や確認を制度対応のために行う必要があるが、税務ソフトや会計SaaSは重く、日々の保存・確認・抜け漏れチェックだけを軽く行いたい。",
+    "currentSubstitute": "会計SaaS（重い）／手作業のチェック／放置",
+    "spendType": "subscription",
+    "monetizationGuess": "月額1,480円〜のサブスク",
+    "productFormFit": ["記録/チェックリスト系", "専門判断はしない", "証憑整理補助", "月額課金"],
+    "legalRisk": 3,
+    "opsRisk": 2,
+    "founderFit": 4,
+    "buildEase": 3,
+    "testableWithinDays": 7,
+    "testMethod": "「保存と抜け漏れチェックだけ」の軽量フローを試作し、会計SaaS併用層に当てる",
+    "nextAction": "専門判断を避けつつ制度対応の安心を訴求できるか、コピーをLPで検証する"
+  },
+  "initialInputs": {
+    "spend": 4,
+    "dissatisfaction": 3,
+    "pain": 4,
+    "frequency": 4,
+    "discoverability": 4,
+    "substitute": 3,
+    "legalRisk": 3,
+    "opsRisk": 2
+  },
+  "rawSignals": [
+    {
+      "sourceType": "regulation",
+      "sourceName": "制度改正（インボイス/電帳法）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "インボイス制度や電子帳簿保存法対応に関する情報が継続的に更新され、小規模事業者向けの解説・テンプレ・講座が多数存在する。",
+      "observedEntity": "インボイス/電子帳簿保存法 対応",
+      "observedUpdate": "2026-06-05",
+      "signalTags": ["regulation", "compliance", "content"]
+    },
+    {
+      "sourceType": "seo",
+      "sourceName": "検索ボリューム（制度対応）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「インボイス 保存 方法」「電子帳簿保存法 個人事業主」などの検索が継続的に多い。",
+      "observedEntity": "インボイス 保存 方法",
+      "observedUpdate": "2026-05-29",
+      "signalTags": ["search", "intent"]
+    },
+    {
+      "sourceType": "community",
+      "sourceName": "個人事業主コミュニティ",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「保存と確認だけ軽くやりたい」「会計ソフトは重くて続かない」という声がある。",
+      "observedEntity": "証憑保存・確認の軽量化",
+      "observedUpdate": "2026-05-24",
+      "signalTags": ["dissatisfaction", "lightweight"]
+    }
+  ],
+  "evidence": [
+    {
+      "rawSignal": 0,
+      "evidenceType": "regulation",
+      "strength": 3,
+      "credibility": 3,
+      "note": "制度対応の継続更新＝需要の持続（distinct source に寄与）"
+    },
+    {
+      "rawSignal": 1,
+      "evidenceType": "search",
+      "strength": 4,
+      "credibility": 3,
+      "note": "制度対応の検索が継続的に発生"
+    },
+    {
+      "rawSignal": 2,
+      "evidenceType": "dissatisfaction",
+      "strength": 3,
+      "credibility": 3,
+      "note": "会計SaaSが重いという不満"
+    }
+  ]
+}

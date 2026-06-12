@@ -1,0 +1,93 @@
+{
+  "key": "receipts",
+  "top100": "pass",
+  "candidate": {
+    "problemFamily": "請求書・証憑処理",
+    "title": "小規模事業者向け 証憑・請求書のスマホ整理アプリ",
+    "targetUser": "個人事業主・小規模事業者",
+    "contextTrigger": "確定申告・取引先提出のたびに領収書/請求書を探す",
+    "painStatement": "領収書・請求書・契約書PDFを写真フォルダやクラウドに雑に保存しており、後で探せない・分類できない・提出前に混乱する。",
+    "currentSubstitute": "写真フォルダ／クラウドストレージ／手作業のフォルダ分け",
+    "spendType": "subscription",
+    "monetizationGuess": "月額1,480円〜のサブスク",
+    "productFormFit": ["モバイルアプリ", "小規模事業者向け", "AI分類", "証憑整理"],
+    "legalRisk": 1,
+    "opsRisk": 2,
+    "founderFit": 4,
+    "buildEase": 3,
+    "testableWithinDays": 7,
+    "testMethod": "LPで「スマホで撮る→自動分類」を訴求し事前登録CVを測る",
+    "nextAction": "競合アプリの低評価レビューを20件分類し不満カテゴリを確定する"
+  },
+  "initialInputs": {
+    "spend": 5,
+    "dissatisfaction": 4,
+    "pain": 4,
+    "frequency": 3,
+    "discoverability": 4,
+    "substitute": 4,
+    "legalRisk": 1,
+    "opsRisk": 2
+  },
+  "rawSignals": [
+    {
+      "sourceType": "app_store",
+      "sourceName": "App Store Top Grossing (Productivity)",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "PDFスキャン／書類整理系アプリがProductivityカテゴリの売上ランキングに複数存在。年額サブスクあり。",
+      "observedEntity": "PDFスキャン／書類整理アプリ",
+      "observedPrice": "¥4,800/年",
+      "observedRank": "Top Grossing #18",
+      "observedRating": 3.6,
+      "observedReviews": 1820,
+      "observedUpdate": "2026-05-28",
+      "signalTags": ["top_grossing", "subscription", "productivity"]
+    },
+    {
+      "sourceType": "review",
+      "sourceName": "App Store レビュー（低評価）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "低評価レビューに「高い」「日本語が弱い」「自動分類が弱い」が複数ある。",
+      "observedEntity": "競合の書類整理アプリ",
+      "observedRating": 2.4,
+      "observedReviews": 320,
+      "observedUpdate": "2026-06-01",
+      "signalTags": ["dissatisfaction", "pricing", "localization"]
+    },
+    {
+      "sourceType": "seo",
+      "sourceName": "検索ボリューム（関連語）",
+      "country": "JP",
+      "language": "ja",
+      "rawText": "「領収書 整理 アプリ」「請求書 スキャン 保存」などの検索が継続的に発生している。",
+      "observedEntity": "領収書 整理 アプリ",
+      "observedUpdate": "2026-05-20",
+      "signalTags": ["search", "intent"]
+    }
+  ],
+  "evidence": [
+    {
+      "rawSignal": 0,
+      "evidenceType": "spend",
+      "strength": 5,
+      "credibility": 4,
+      "note": "年額サブスクが売上ランキング上位＝実際に金が動いている"
+    },
+    {
+      "rawSignal": 1,
+      "evidenceType": "dissatisfaction",
+      "strength": 4,
+      "credibility": 3,
+      "note": "既存アプリの価格・日本語・分類精度への不満が複数"
+    },
+    {
+      "rawSignal": 2,
+      "evidenceType": "search",
+      "strength": 3,
+      "credibility": 3,
+      "note": "整理ニーズの検索が継続"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import {
   type RawSignalRow,
 } from "../../components/raw-signal/RawSignalTable";
 import { SOURCE_TYPE_VALUES, STATUS_VALUES } from "../../lib/validation/enums";
+import { createLatestGuard } from "../../app/raw-signals/page";
 
 // task-19 Raw Signal 一覧（spec v2 §9.3）。
 // テスト基盤に DOM/インタラクション依存は足さない方針のため、フィルタ→API クエリの
@@ -144,6 +145,37 @@ describe("fetchRawSignals: 取得（fetcher DI）", () => {
     const failing = (async () =>
       ({ ok: false, status: 500, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
     await expect(fetchRawSignals(emptyRawSignalQuery(), failing)).rejects.toThrow();
+  });
+});
+
+describe("createLatestGuard: 古いレスポンスの後着を破棄する", () => {
+  it("後から始めた新リクエストのトークンだけが current", () => {
+    const guard = createLatestGuard();
+    const t1 = guard.next();
+    const t2 = guard.next();
+    // 旧クエリ(t1)の応答が後着しても、最新は t2 なので破棄される。
+    expect(guard.isCurrent(t1)).toBe(false);
+    expect(guard.isCurrent(t2)).toBe(true);
+  });
+
+  it("応答の到着順が逆転しても最新クエリの結果のみが採用される", async () => {
+    const guard = createLatestGuard();
+    const applied: string[] = [];
+
+    // 1回目（遅い）と2回目（速い）を順に開始し、解決順を逆転させる。
+    const t1 = guard.next();
+    const slow = Promise.resolve("old");
+    const t2 = guard.next();
+    const fast = Promise.resolve("new");
+
+    // 速い2回目が先に解決 → 採用。
+    const r2 = await fast;
+    if (guard.isCurrent(t2)) applied.push(r2);
+    // 遅い1回目が後で解決 → 旧トークンなので破棄。
+    const r1 = await slow;
+    if (guard.isCurrent(t1)) applied.push(r1);
+
+    expect(applied).toEqual(["new"]);
   });
 });
 

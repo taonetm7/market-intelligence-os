@@ -34,14 +34,12 @@
 import { Prisma } from "@prisma/client";
 
 import { candidateRepo, type SettableStage } from "../../../../../lib/db/candidateRepo";
-import { decisionLogRepo } from "../../../../../lib/db/decisionLogRepo";
 import { STRONG_SIGNAL_TYPES, evidenceRepo } from "../../../../../lib/db/evidenceRepo";
 import { totalForGate } from "../../../../../lib/scoring/detailedScore";
 import { scoringConfig } from "../../../../../lib/scoring/config";
 import { evaluateTop100Gate, type StrongSignalType } from "../../../../../lib/scoring/gateTop100";
 import { evaluateTop30Gate } from "../../../../../lib/scoring/gateTop30";
 import {
-  decisionTypeSchema,
   stageSchema,
   type EvidenceType,
   type Stage,
@@ -173,15 +171,14 @@ export async function POST(request: Request, ctx: RouteContext): Promise<Respons
     }
     // hypothesis15 以降は自動ゲート無し（Top15 以降は人間判断・§8.8）。人間トリガの記録のみ行う。
 
-    // ゲート通過 → 1段昇格。stage 永続化に続けて DecisionLog(promote) を刻む（§15.3）。
-    // 昇格イベントは decisionType/fromStage/toStage の構造化フィールドで追えるため、
-    // reason 未指定時は遷移を説明する既定理由を補う（DecisionLog の必須 reason を満たす）。
-    const data = await candidateRepo.setStage(id, toStage);
-    await decisionLogRepo.log({
-      candidateId: id,
-      decisionType: decisionTypeSchema.enum.promote,
-      fromStage,
+    // ゲート通過 → 1段昇格。stage 永続化と DecisionLog(promote) を**原子的に**刻む（§15.3）。
+    // 両者を別 DB 操作に分けると log 失敗時に「stage だけ昇格し判断履歴が欠ける」状態が残るため、
+    // candidateRepo.promote が同一 $transaction で一体記録する（task-30 Codex レビュー指摘の対応）。
+    // 昇格イベントは decisionType/fromStage/toStage の構造化フィールドで追えるため、reason 未指定時は
+    // 遷移を説明する既定理由を補う（DecisionLog の必須 reason を満たす）。
+    const data = await candidateRepo.promote(id, {
       toStage,
+      fromStage,
       reason: reason ?? `${fromStage}→${toStage} へ昇格`,
     });
     return Response.json({ data }, { status: 200 });

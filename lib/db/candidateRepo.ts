@@ -28,7 +28,13 @@
 import { type Candidate, Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
-import { originSchema, rejectedReasonCodeSchema, stageSchema } from "../validation/enums";
+import {
+  decisionTypeSchema,
+  originSchema,
+  rejectedReasonCodeSchema,
+  stageSchema,
+  type Stage,
+} from "../validation/enums";
 import {
   candidateInputSchema,
   confidence01,
@@ -39,6 +45,7 @@ import {
   type InitialInputs,
 } from "../validation/schemas";
 import { prisma } from "./client";
+import { decisionLogRepo } from "./decisionLogRepo";
 import { nextCandidateDisplayId } from "./displayId";
 import { record as recordSnapshot, SAVE_SCORES_SNAPSHOT_REASON } from "./snapshotRepo";
 
@@ -303,6 +310,54 @@ export async function setStage(
 }
 
 /**
+ * 昇格の入力。`toStage`（settable）と DecisionLog に刻む昇格イベント（fromStage / reason）を
+ * 受ける。decisionType は `promote` 固定（この関数の意味論そのもの）なので呼び出し側は渡さない。
+ */
+export interface CandidatePromote {
+  /** 昇格先 stage（`rejected` 不可）。 */
+  toStage: SettableStage;
+  /** 昇格元 stage（DecisionLog の fromStage に残す）。 */
+  fromStage: Stage;
+  /** 昇格理由（DecisionLog の必須 reason・§15.3）。空文字は log 側の Zod が弾く。 */
+  reason: string;
+}
+
+/**
+ * stage を1段昇格し、その判断（DecisionLog: promote）を**同一トランザクションで原子的に**刻む
+ * （§8.9 / §15.3）。ゲート判定そのものは呼び出し側（API task-30）の責務で、ここは「昇格の
+ * 永続化＋判断履歴の記録」を一体で扱う。
+ *
+ * 不可分にする理由（task-30 受け入れ条件）: stage 更新と DecisionLog を別 DB 操作に分けると、
+ * log 失敗時に「stage だけ昇格し判断履歴が欠ける」状態が永続化され得て監査が破綻する。
+ * `decisionLogRepo.log` は単発 create で内部に $transaction を張らない（TransactionClient 対応）
+ * ため、ここでネストせずに同一 `$transaction` 内へ入れられる（saveScores + snapshot と同じ流儀）。
+ *
+ * `rejected` への遷移はここでは行えない（§15.1: 棄却は理由コード必須＝`reject()` 経由のみ）。
+ */
+export async function promote(
+  id: string,
+  input: CandidatePromote,
+  db: CandidateDb = prisma,
+): Promise<CandidateRecord> {
+  const toStage = settableStageSchema.parse(input.toStage);
+  const row = await db.$transaction(async (tx) => {
+    const updated = await tx.candidate.update({ where: { id }, data: { stage: toStage } });
+    await decisionLogRepo.log(
+      {
+        candidateId: id,
+        decisionType: decisionTypeSchema.enum.promote,
+        fromStage: input.fromStage,
+        toStage,
+        reason: input.reason,
+      },
+      tx,
+    );
+    return updated;
+  });
+  return decode(row);
+}
+
+/**
  * 棄却する。`rejectedReasonCode`(enum) 必須・`stage='rejected'` に固定する（§15.1）。
  * コード無し（未指定や不正値）は Zod が弾く＝棄却できない。
  */
@@ -446,6 +501,7 @@ export const candidateRepo = {
   getById,
   update,
   setStage,
+  promote,
   reject,
   saveScores,
   list,

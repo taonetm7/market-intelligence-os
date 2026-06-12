@@ -40,6 +40,7 @@ import {
 } from "../validation/schemas";
 import { prisma } from "./client";
 import { nextCandidateDisplayId } from "./displayId";
+import { record as recordSnapshot, SAVE_SCORES_SNAPSHOT_REASON } from "./snapshotRepo";
 
 /**
  * repository が受け取る Prisma クライアント。
@@ -326,6 +327,11 @@ export async function reject(
  * （initialScore / detailedScore / signalBonus / uncertaintyPenalty / confidence）と
  * scoreConfigVersion を、与えられたものだけ更新する（§7.3 設計意図: 素点も保存して
  * 再計算/重み変更/監査を可能にする）。スコア計算本体はここには持たない（§8.9）。
+ *
+ * 保存のたびに ScoreSnapshot を 1 行**自動記録**する（task-28・§7.5）。週次の上昇/低下
+ * 候補（§9.9）が機能する前提として、スコア更新と snapshot を同一 `$transaction` で原子的に
+ * 刻む。snapshot は「更新後の Candidate の派生スコア一式」を写すため、部分保存でも常にその
+ * 時点の完全なスコア状態が履歴に残る（差分が常に追える）。
  */
 export async function saveScores(
   id: string,
@@ -347,7 +353,25 @@ export async function saveScores(
   if (data.confidence !== undefined) updateData.confidence = data.confidence;
   if (data.scoreConfigVersion !== undefined) updateData.scoreConfigVersion = data.scoreConfigVersion;
 
-  const row = await db.candidate.update({ where: { id }, data: updateData });
+  // スコア更新と snapshot 記録を原子的に行う（片方だけ成功して履歴が欠ける状態を防ぐ）。
+  // recordSnapshot は単発 create で内部に $transaction を張らないため、ここでネストできる。
+  const row = await db.$transaction(async (tx) => {
+    const updated = await tx.candidate.update({ where: { id }, data: updateData });
+    await recordSnapshot(
+      {
+        candidateId: updated.id,
+        initialScore: updated.initialScore,
+        detailedScore: updated.detailedScore,
+        signalBonus: updated.signalBonus,
+        uncertaintyPenalty: updated.uncertaintyPenalty,
+        confidence: updated.confidence,
+        configVersion: updated.scoreConfigVersion,
+        reason: SAVE_SCORES_SNAPSHOT_REASON,
+      },
+      tx,
+    );
+    return updated;
+  });
   return decode(row);
 }
 

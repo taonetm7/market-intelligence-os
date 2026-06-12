@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { Button, Modal } from "../../components/ui";
 import { QuickCapture } from "../../components/raw-signal/QuickCapture";
+import { LinkDialog } from "../../components/evidence/LinkDialog";
 import {
   TriageQueue,
   archiveSignal,
@@ -50,6 +51,8 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [captureOpen, setCaptureOpen] = useState(false);
+  // Link UI（task-22 导线A）を開いている対象 Signal。null なら閉じている。
+  const [linkSignal, setLinkSignal] = useState<TriageSignal | null>(null);
   const guardRef = useRef(createLatestGuard());
 
   const load = useCallback(async () => {
@@ -124,12 +127,22 @@ export default function InboxPage() {
     [runAction],
   );
 
-  // TODO(task-22): Link は候補サジェスト UI（候補検索 → type/strength 指定）を起動する。
-  // task-22 未実装のため、ここでは起動フックのプレースホルダとして通知のみ出す（導線は動く）。
+  // Link（task-22 导线A）: RawSignal を固定し、候補を検索して link するダイアログを開く。
   const handleLink = useCallback((signal: TriageSignal) => {
     setError(null);
-    setNotice(`${signal.displayId} の Link UI は task-22 で実装予定です`);
+    setNotice(null);
+    setLinkSignal(signal);
   }, []);
+
+  // link 成功 → 通知してキューを取り直す（link 済み Signal は unlinked=1 から外れキューから消える）。
+  const handleLinked = useCallback(
+    (signal: TriageSignal) => {
+      setLinkSignal(null);
+      setNotice(`${signal.displayId} を候補に link しました`);
+      void load();
+    },
+    [load],
+  );
 
   return (
     <>
@@ -176,6 +189,17 @@ export default function InboxPage() {
         {/* 捌きながら追加: 保存のたびにキューを取り直す（新規 Signal が即キューに載る）。 */}
         <QuickCapture onSaved={() => void load()} />
       </Modal>
+
+      {/* Link UI（导线A）: RawSignal を固定し候補を検索して link する。閉じている間は描画しない。 */}
+      {linkSignal ? (
+        <LinkDialog
+          open
+          onClose={() => setLinkSignal(null)}
+          rawSignalId={linkSignal.id}
+          rawSignalLabel={linkSignal.displayId}
+          onLinked={() => handleLinked(linkSignal)}
+        />
+      ) : null}
     </>
   );
 }

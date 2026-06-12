@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PageHeader } from "../layout/PageHeader";
 import { Badge, Button } from "../ui";
+import { LinkDialog } from "../evidence/LinkDialog";
 import { formatConfidence, formatScore, stageTone } from "./CandidateTable";
 import { ScoringPanel, type ScoreValues } from "./ScoringPanel";
 import { RejectModal, promoteCandidate, rejectCandidate, type RejectInput } from "./PromoteRejectModal";
@@ -245,6 +246,8 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  // Evidence link UI（task-22 导线B）の開閉。
+  const [linkOpen, setLinkOpen] = useState(false);
   const guardRef = useRef(createLatestGuard());
 
   const load = useCallback(async () => {
@@ -310,12 +313,19 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
     [runAction, candidateId],
   );
 
-  // TODO(task-22): Evidence 追加は候補に Raw Signal を link する UI を起動する。
-  // task-22 未実装のため、ここでは起動フックのプレースホルダとして通知のみ出す（導線は動く）。
+  // Evidence 追加（task-22 导线B）: Candidate を固定し、未紐付け Raw Signal を検索して link する。
   const handleAddEvidence = useCallback(() => {
     setError(null);
-    setNotice("Evidence の追加（link UI）は task-22 で実装予定です");
+    setNotice(null);
+    setLinkOpen(true);
   }, []);
+
+  // link 成功 → 通知して候補・Evidence を取り直す（signalStats / 進級可否が即更新される §9.6）。
+  const handleLinked = useCallback(() => {
+    setLinkOpen(false);
+    setNotice("Raw Signal を Evidence として link しました");
+    void load();
+  }, [load]);
 
   // 昇格できるのは normalized の候補のみ（§8.9。Slice 1 は normalized→top100）。
   const canPromote = candidate?.stage === "normalized";
@@ -389,6 +399,18 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
         onSubmit={handleRejectSubmit}
         submitting={actionPending}
       />
+
+      {/* Evidence link UI（导线B）: Candidate を固定し未紐付け Raw Signal を検索して link する。
+          開いている間だけ描画し、開くたびにフレッシュマウントして入力状態を初期化する。 */}
+      {linkOpen ? (
+        <LinkDialog
+          open
+          onClose={() => setLinkOpen(false)}
+          candidateId={candidateId}
+          candidateLabel={candidate?.displayId}
+          onLinked={handleLinked}
+        />
+      ) : null}
     </>
   );
 }

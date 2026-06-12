@@ -91,6 +91,18 @@ export interface CandidateListFilter {
 }
 
 /**
+ * setStage / update から直接セットしてよい stage。`rejected` を除外する。
+ *
+ * 不変条件（§15.1）: `rejected` への遷移は理由コード（rejectedReasonCode）必須＝
+ * `reject()` 経由のみとする。`setStage` / `update` から理由コード無しに
+ * `stage='rejected'` へ落とせると、棄却理由の傾向分析（§15.1）が成立しなくなる。
+ * そこで両パスの stage 入力をこのスキーマに限定し、型レベル（union から `rejected`
+ * を除外）と実行時（Zod parse で弾く）の両方で迂回を塞ぐ。
+ */
+export const settableStageSchema = stageSchema.exclude(["rejected"]);
+export type SettableStage = z.infer<typeof settableStageSchema>;
+
+/**
  * 更新パッチ。入力スキーマの部分集合（省略フィールドは変更しない）。
  *
  * 注意（task-08 の教訓）: `candidateInputSchema.partial()` だけでは不十分。Zod4 は
@@ -100,13 +112,16 @@ export interface CandidateListFilter {
  * そのまま update に流すと「省略したフィールドが default で上書き」される。
  * そこで default を持つ 3 フィールドだけ default 無しの optional に差し替え、
  * 「省略＝undefined＝変更しない」を構造的に保証する。
+ *
+ * さらに stage は `settableStageSchema`（`rejected` 除外）に差し替え、update から
+ * 理由コード無しで `rejected` へ遷移する迂回を型・実行時の両面で禁止する（§15.1）。
  */
 export const candidateUpdateSchema = candidateInputSchema.partial().extend({
   productFormFit: z.array(z.string()).optional(),
-  stage: stageSchema.optional(),
+  stage: settableStageSchema.optional(),
   origin: originSchema.optional(),
 });
-export type CandidateUpdate = Partial<CandidateInput>;
+export type CandidateUpdate = z.infer<typeof candidateUpdateSchema>;
 
 /**
  * 棄却の入力。`rejectedReasonCode`(enum) を必須にする（§15.1 傾向分析用）。
@@ -248,13 +263,17 @@ export async function update(
 /**
  * stage を変更する（§14 のステージ管理）。enum を Zod 検証してから更新する。
  * 進級ゲートの判定自体は呼び出し側（API task-13）の責務。ここは永続化のみ。
+ *
+ * `rejected` への遷移はここでは行えない（§15.1）。理由コード必須のため、棄却は
+ * `reject()` 経由に限定する。`settableStageSchema` が `rejected` を弾く（実行時）と
+ * ともに、`SettableStage` 型で型レベルにも `rejected` を渡せないようにする。
  */
 export async function setStage(
   id: string,
-  stage: string,
+  stage: SettableStage,
   db: CandidateDb = prisma,
 ): Promise<CandidateRecord> {
-  const validated = stageSchema.parse(stage);
+  const validated = settableStageSchema.parse(stage);
   const row = await db.candidate.update({ where: { id }, data: { stage: validated } });
   return decode(row);
 }

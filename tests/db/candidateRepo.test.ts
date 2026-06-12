@@ -170,6 +170,29 @@ describe("candidateRepo CRUD", () => {
     expect(fetched?.origin).toBe("import");
   });
 
+  it("refuses to set stage='rejected' via update (must go through reject(); Codex regression)", async () => {
+    // 不変条件 §15.1: rejected への遷移は理由コード必須。update からの直接セットも
+    // setStage と同様に弾き、理由コード無しの棄却の迂回路を塞ぐ。
+    const created = await candidateRepo.create(inputFixture(), db);
+    await expect(
+      // @ts-expect-error update スキーマの stage は 'rejected' を除外（型でも弾く）。
+      candidateRepo.update(created.id, { stage: "rejected" }, db),
+    ).rejects.toThrow();
+
+    // 迂回は成立していない（stage は元のまま、理由コードも付かない）。
+    const fetched = await candidateRepo.getById(created.id, db);
+    expect(fetched?.stage).toBe("normalized");
+    expect(fetched?.rejectedReasonCode).toBeNull();
+
+    // 一方、reject() 経由なら理由コード付きで rejected に遷移できる（正規ルートは健在）。
+    const rejected = await candidateRepo.reject(
+      { id: created.id, rejectedReasonCode: "low_pain" },
+      db,
+    );
+    expect(rejected.stage).toBe("rejected");
+    expect(rejected.rejectedReasonCode).toBe("low_pain");
+  });
+
   it("assigns a CND-NNN displayId and increments across creates", async () => {
     const first = await candidateRepo.create(inputFixture(), db);
     const second = await candidateRepo.create(inputFixture(), db);
@@ -192,7 +215,24 @@ describe("candidateRepo.setStage", () => {
 
   it("rejects an invalid stage value (via Zod)", async () => {
     const created = await candidateRepo.create(inputFixture(), db);
-    await expect(candidateRepo.setStage(created.id, "not_a_stage", db)).rejects.toThrow();
+    await expect(
+      candidateRepo.setStage(created.id, "not_a_stage" as never, db),
+    ).rejects.toThrow();
+  });
+
+  it("refuses to move to 'rejected' (must go through reject(); Codex regression)", async () => {
+    // 不変条件 §15.1: rejected への遷移は理由コード必須 = reject() 経由のみ。
+    // setStage から rejected に落とすと理由コード無しの棄却ができてしまうため弾く。
+    const created = await candidateRepo.create(inputFixture(), db);
+    await expect(
+      // @ts-expect-error 'rejected' は SettableStage から除外されている（型でも弾く）。
+      candidateRepo.setStage(created.id, "rejected", db),
+    ).rejects.toThrow();
+
+    // 迂回は成立していない（stage は元のまま、理由コードも付かない）。
+    const fetched = await candidateRepo.getById(created.id, db);
+    expect(fetched?.stage).toBe("normalized");
+    expect(fetched?.rejectedReasonCode).toBeNull();
   });
 });
 

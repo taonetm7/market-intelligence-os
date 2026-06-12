@@ -33,9 +33,17 @@ export type InvalidRow = {
   errors: string[];
 };
 
-/** パース結果。valid は内部表現（RawSignalInput）、invalid は行番号＋理由。 */
+/**
+ * 正常行 1 件。検証済みの内部表現（RawSignalImport）に元入力の行番号を**追加**で持たせる
+ * （既存の各フィールドアクセスは不変の追加的拡張）。`row` は InvalidRow.row と同じ基準
+ * （JSON: `rawSignals[]` の 1 始まり位置 / CSV: 物理ファイル行）。invalid 行が混在しても
+ * valid 行が元入力のどの行かを突合できるようにする（Codex 指摘3・quarantine レビュー用）。
+ */
+export type ValidRow = RawSignalImport & { row: number };
+
+/** パース結果。valid は内部表現（RawSignalImport）＋元行番号、invalid は行番号＋理由。 */
 export type ParseResult = {
-  valid: RawSignalImport[];
+  valid: ValidRow[];
   invalid: InvalidRow[];
 };
 
@@ -71,13 +79,14 @@ function zodMessages(error: z.ZodError): string[] {
  * @param rowNumberAt 配列 index → 表示用行番号への写像（JSON と CSV で起点が異なる）
  */
 function validateRows(rows: unknown[], rowNumberAt: (index: number) => number): ParseResult {
-  const valid: RawSignalImport[] = [];
+  const valid: ValidRow[] = [];
   const invalid: InvalidRow[] = [];
 
   rows.forEach((row, index) => {
     const result = rawSignalImportSchema.safeParse(row);
     if (result.success) {
-      valid.push(result.data);
+      // valid 行にも元入力行番号を付与する（invalid 混在時のズレ防止・Codex 指摘3）。
+      valid.push({ ...result.data, row: rowNumberAt(index) });
     } else {
       invalid.push({ row: rowNumberAt(index), errors: zodMessages(result.error) });
     }

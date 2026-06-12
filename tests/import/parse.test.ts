@@ -85,6 +85,16 @@ describe("parseJson", () => {
     expect(result.valid).toHaveLength(2);
     expect(result.invalid).toHaveLength(1);
     expect(result.invalid[0]?.row).toBe(2);
+    // valid 行も元入力行番号を保持する（valid 配列順 1,2 ではなく元の 1,3・Codex 指摘3）。
+    expect(result.valid[0]?.row).toBe(1);
+    expect(result.valid[1]?.row).toBe(3);
+  });
+
+  it("valid 行は元入力の行番号（row）を保持する（単一行は row=1）", () => {
+    const result = parseJson({ rawSignals: [validSignal] });
+    expect(result.valid[0]?.row).toBe(1);
+    // 追加フィールドであり既存の内部表現アクセスは不変。
+    expect(result.valid[0]?.sourceType).toBe("review");
   });
 
   it("JSON として解釈できない文字列は全体エラー（row=0）", () => {
@@ -170,6 +180,9 @@ describe("parseCsv", () => {
     expect(result.valid).toHaveLength(2);
     expect(result.invalid).toHaveLength(1);
     expect(result.invalid[0]?.row).toBe(3);
+    // valid 行も物理ファイル行を保持する（line 2 と line 4・Codex 指摘3）。
+    expect(result.valid[0]?.row).toBe(2);
+    expect(result.valid[1]?.row).toBe(4);
   });
 
   it("引用符で囲んだフィールド内のカンマ・改行を 1 セルとして扱う", () => {
@@ -180,6 +193,8 @@ describe("parseCsv", () => {
     expect(result.valid).toHaveLength(1);
     expect(result.valid[0]?.sourceName).toBe("App, Inc.");
     expect(result.valid[0]?.rawText).toBe("1行目\n2行目");
+    // 引用符内改行を含むレコードでも valid 行はレコード開始の物理行（line 2）を保持。
+    expect(result.valid[0]?.row).toBe(2);
   });
 
   it("空入力は全体エラー（row=0）", () => {

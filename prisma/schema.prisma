@@ -104,6 +104,41 @@ model Evidence {
   @@index([candidateId])
 }
 
+// import の隔離（quarantine）バッチ — task-15, spec v2 §10.1。
+// import 行を即本登録せず、まずこの運用テーブルへ隔離する。§7 のコア5とは別系統。
+// v1 で「幽霊」として削除した ImportBatch とは別物（こちらは隔離の実体を持つ）。
+model ImportBatch {
+  id        String   @id @default(cuid())
+  origin    String   @default("import") // import | ai（§10.1 step4 / §11.2）
+  format    String // json | csv（受領フォーマット）
+  note      String?
+  createdAt DateTime @default(now())
+
+  rows QuarantineRow[]
+
+  @@index([createdAt])
+}
+
+// 隔離された 1 行 — task-15, spec v2 §10.1。
+// status: pending（valid・accept 待ち）/ invalid（検証 NG・accept 不可）/ accepted（本登録済み）。
+// payloadJson は valid 行の RawSignalInput を直列化（SQLite に JSON 型が無いため）。
+// errorsJson は invalid 行の理由配列。rawSignalId は accept 後に作られた RawSignal の id。
+model QuarantineRow {
+  id          String   @id @default(cuid())
+  batchId     String
+  rowNumber   Int // パーサ由来の行番号（JSON=配列位置 / CSV=物理行 / 0=全体エラー）
+  status      String   @default("pending") // pending | invalid | accepted
+  payloadJson String? // valid 行の RawSignalInput（accept で本登録する元データ）
+  errorsJson  String? // invalid 行の検証エラー理由（行番号＋理由の表示用）
+  rawSignalId String? // accept 後に紐付く RawSignal の id（本登録の証跡）
+  createdAt   DateTime @default(now())
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([status])
+}
+
 model ScoreSnapshot {
   id                 String   @id @default(cuid())
   candidateId        String

@@ -51,6 +51,10 @@ export type CandidateDetailData = {
   currentSubstitute: string | null;
   spendType: string | null;
   monetizationGuess: string | null;
+  // §9.5 必須セクション。GET /api/candidates/[id] は productFormFit を string[] で返す
+  // （candidateRepo.decode が *Json を復元）。本タスクは読み取り表示のみ。
+  // TODO(task-26/編集フォーム): ProductFormFit の編集 UI は候補編集側の scope。
+  productFormFit: string[];
   nextAction: string | null;
   initialScore: number | null;
   detailedScore: number | null;
@@ -115,6 +119,21 @@ export function evidenceTypeTone(type: string) {
   return STRONG_EVIDENCE_TYPES.has(type) ? ("info" as const) : ("neutral" as const);
 }
 
+/** ProductFormFit コード → 表示ラベル（spec v2 §6 productFormFitJson の値域）。 */
+const PRODUCT_FORM_FIT_LABELS: Record<string, string> = {
+  mobile_app: "モバイルアプリ",
+  web_saas: "Web SaaS",
+  ai_tool: "AI ツール",
+  chrome_extension: "Chrome 拡張",
+  template: "テンプレート",
+  concierge: "コンシェルジュ",
+};
+
+/** ProductFormFit の string[] を表示文字列に整形する（未知コードはそのまま）。空配列は ""。 */
+export function formatProductFormFit(codes: string[]): string {
+  return codes.map((code) => PRODUCT_FORM_FIT_LABELS[code] ?? code).join("、");
+}
+
 const DEF_ROW_STYLE = { display: "flex", gap: 8, padding: "4px 0", fontSize: 13 } as const;
 const DEF_LABEL_STYLE = { width: 140, color: "#667085", flexShrink: 0 } as const;
 
@@ -145,6 +164,7 @@ export function CandidateSummary({ candidate: c }: CandidateSummaryProps) {
       <DefRow label="現在の代替手段" value={c.currentSubstitute} />
       <DefRow label="支出形態" value={c.spendType} />
       <DefRow label="マネタイズ仮説" value={c.monetizationGuess} />
+      <DefRow label="プロダクト形態" value={formatProductFormFit(c.productFormFit)} />
       <DefRow label="次アクション" value={c.nextAction} />
       <DefRow label="初期スコア" value={formatScore(c.initialScore)} />
       <DefRow label="詳細スコア" value={formatScore(c.detailedScore)} />

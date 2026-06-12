@@ -33,6 +33,7 @@ import {
   evidenceTypeTone,
   fetchCandidate,
   fetchCandidateEvidence,
+  formatProductFormFit,
   type CandidateDetailData,
   type EvidenceRow,
 } from "../../components/candidate/CandidateDetail";
@@ -296,6 +297,7 @@ function candidate(overrides: Partial<CandidateDetailData> = {}): CandidateDetai
     currentSubstitute: "Excel",
     spendType: "subscription",
     monetizationGuess: null,
+    productFormFit: ["mobile_app", "ai_tool"],
     nextAction: "スモークテスト",
     initialScore: 82,
     detailedScore: null,
@@ -362,6 +364,29 @@ describe("CandidateSummary / EvidenceList: 描画", () => {
     expect(html).toContain("請求・経理");
     expect(html).toContain("82.0"); // initialScore
     expect(html).toContain("0.70"); // confidence
+  });
+
+  it("ProductFormFit（§9.5 必須セクション）をラベルで描画する", () => {
+    const html = renderToStaticMarkup(
+      <CandidateSummary candidate={candidate({ productFormFit: ["mobile_app", "ai_tool"] })} />,
+    );
+    expect(html).toContain("プロダクト形態");
+    expect(html).toContain("モバイルアプリ");
+    expect(html).toContain("AI ツール");
+  });
+
+  it("ProductFormFit が空配列なら '—' を描画する", () => {
+    const html = renderToStaticMarkup(
+      <CandidateSummary candidate={candidate({ productFormFit: [] })} />,
+    );
+    expect(html).toContain("プロダクト形態");
+    // 空配列 → 整形結果は "" → DefRow が "—" にフォールバックする。
+    expect(formatProductFormFit([])).toBe("");
+  });
+
+  it("formatProductFormFit はコードをラベル化し、未知コードはそのまま残す", () => {
+    expect(formatProductFormFit(["web_saas", "concierge"])).toBe("Web SaaS、コンシェルジュ");
+    expect(formatProductFormFit(["unknown_form"])).toBe("unknown_form");
   });
 
   it("Evidence 一覧は件数と各行（種別・強度）を描画する", () => {

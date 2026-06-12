@@ -25,6 +25,27 @@ import { candidateRepo, type CandidateUpdate } from "../../../../lib/db/candidat
 /** id が指す Candidate が存在しないときの共通 404 ボディ。 */
 const NOT_FOUND_BODY = { error: { message: "Candidate が見つかりません" } } as const;
 
+/** stage 入力を拒否したときの共通 400 ボディ。 */
+const STAGE_FORBIDDEN_BODY = {
+  error: {
+    message: "stage はこの API では変更できません（昇格は専用 API、棄却は POST /reject、退役は DELETE）",
+  },
+} as const;
+
+/**
+ * body に `stage` キーが含まれるか判定する。
+ *
+ * stage 昇格（normalized → top100 / top30 / …）はゲート判定を伴う task-21 の責務で、
+ * task-13 では Out of scope（§13）。更新 API から任意の stage を渡せると進級ゲートを迂回して
+ * 昇格できてしまうため、PUT では stage 入力を受け付けない。正規の stage 遷移経路は
+ * 「昇格＝専用 API（task-21）」「棄却＝POST /reject（理由コード必須・§15.1）」
+ * 「退役＝DELETE（archived ソフト退役）」のみ。黙って無視すると誤用が顕在化しないため、
+ * stage を含むリクエストは明示的に 400 で拒否する（共有 Zod スキーマ / repository は不変更）。
+ */
+function hasStageInput(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "stage" in body;
+}
+
 /** ZodError → 400、Prisma P2025 → 404、それ以外 → 500 に翻訳する共通応答。 */
 function errorResponse(error: unknown): Response {
   if (error instanceof z.ZodError) {
@@ -59,8 +80,9 @@ export async function GET(_request: Request, ctx: RouteContext): Promise<Respons
 /**
  * PUT /api/candidates/[id] — 部分更新。
  * ボディを CandidateUpdate として repository に渡す（検証は repository の Zod）。省略フィールドは
- * 変更しない。派生スコアはこのパスでは変更できない（saveScores 専用）。`stage='rejected'` への
- * 遷移は不可（§15.1: reject 経由のみ）。不正 JSON / 検証 NG は 400、存在しない id は 404、成功は 200。
+ * 変更しない。派生スコアはこのパスでは変更できない（saveScores 専用）。stage 入力は受け付けない
+ * （昇格は task-21、棄却は POST /reject、退役は DELETE が正規経路。§13 Out of scope / §15.1）。
+ * 不正 JSON / stage 指定 / 検証 NG は 400、存在しない id は 404、成功は 200。
  */
 export async function PUT(request: Request, ctx: RouteContext): Promise<Response> {
   const { id } = await ctx.params;
@@ -72,6 +94,10 @@ export async function PUT(request: Request, ctx: RouteContext): Promise<Response
       { error: { message: "リクエストボディの JSON が不正です" } },
       { status: 400 },
     );
+  }
+  // stage 昇格の迂回を塞ぐ: 更新時に stage は変更させない（昇格/棄却/退役は専用経路のみ）。
+  if (hasStageInput(body)) {
+    return Response.json(STAGE_FORBIDDEN_BODY, { status: 400 });
   }
   try {
     const data = await candidateRepo.update(id, body as CandidateUpdate);

@@ -201,8 +201,9 @@ describe("Candidate CRUD", () => {
   it("lists candidates and filters by stage", async () => {
     const a = await createCandidate({ title: "候補A" });
     await createCandidate({ title: "候補B" });
-    // a を top100 へ更新してから stage フィルタを確認する。
-    await candidateIdRoute.PUT(jsonRequest("PUT", { stage: "top100" }), idCtx(a.id));
+    // a を top100 へ昇格させてから stage フィルタを確認する。stage 昇格は task-21 の専用 API
+    // の責務（API 経由の任意昇格は禁止）なので、テスト前提の状態は prisma で直接 seed する。
+    await prisma.candidate.update({ where: { id: a.id }, data: { stage: "top100" } });
 
     const all = await candidatesRoute.GET(new Request("http://localhost/api/candidates"));
     expect(all.status).toBe(200);
@@ -245,6 +246,43 @@ describe("Candidate CRUD", () => {
 
     const missing = await candidateIdRoute.DELETE(new Request("http://localhost/x"), idCtx("nope"));
     expect(missing.status).toBe(404);
+  });
+
+  // stage 昇格は task-21 の専用 API の責務（§13 Out of scope）。作成/更新 API から任意の
+  // stage を渡して進級ゲートを迂回した昇格をさせない（昇格=専用API / 棄却=reject / 退役=DELETE）。
+  it("rejects stage input on POST with 400 and creates nothing", async () => {
+    const res = await candidatesRoute.POST(
+      jsonRequest("POST", { title: "昇格迂回", stage: "top100" }),
+    );
+    expect(res.status).toBe(400);
+    // 昇格どころか作成もされない（stage を含む不正リクエストは丸ごと拒否）。
+    expect(await prisma.candidate.count()).toBe(0);
+  });
+
+  it("rejects stage input on PUT with 400 and leaves stage unchanged", async () => {
+    const cnd = await createCandidate();
+    expect(cnd.stage).toBe("normalized");
+    const res = await candidateIdRoute.PUT(
+      jsonRequest("PUT", { stage: "top30" }),
+      idCtx(cnd.id),
+    );
+    expect(res.status).toBe(400);
+    // API 経由では昇格できない（stage は normalized のまま）。
+    const reread = await prisma.candidate.findUnique({ where: { id: cnd.id } });
+    expect(reread?.stage).toBe("normalized");
+  });
+
+  it("rejects stage even alongside a valid field on PUT (no partial apply)", async () => {
+    const cnd = await createCandidate({ title: "旧" });
+    const res = await candidateIdRoute.PUT(
+      jsonRequest("PUT", { title: "新", stage: "focus" }),
+      idCtx(cnd.id),
+    );
+    expect(res.status).toBe(400);
+    // stage を含むと title 更新ごと拒否される（迂回の余地を残さない）。
+    const reread = await prisma.candidate.findUnique({ where: { id: cnd.id } });
+    expect(reread?.stage).toBe("normalized");
+    expect(reread?.title).toBe("旧");
   });
 });
 

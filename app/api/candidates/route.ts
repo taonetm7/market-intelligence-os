@@ -29,6 +29,27 @@ function errorResponse(error: unknown): Response {
   return Response.json({ error: { message: "サーバ内部エラー" } }, { status: 500 });
 }
 
+/** stage 入力を拒否したときの共通 400 ボディ。 */
+const STAGE_FORBIDDEN_BODY = {
+  error: {
+    message: "stage はこの API では変更できません（昇格は専用 API、棄却は POST /reject、退役は DELETE）",
+  },
+} as const;
+
+/**
+ * body に `stage` キーが含まれるか判定する。
+ *
+ * stage 昇格（normalized → top100 / top30 / …）はゲート判定を伴う task-21 の責務で、
+ * task-13 では Out of scope（§13）。作成/更新 API から任意の stage を渡せると進級ゲートを
+ * 迂回して昇格できてしまうため、stage 入力は受け付けない。正規の stage 遷移経路は
+ * 「昇格＝専用 API（task-21）」「棄却＝POST /reject（理由コード必須・§15.1）」
+ * 「退役＝DELETE（archived ソフト退役）」のみ。黙って無視すると誤用が顕在化しないため、
+ * stage を含むリクエストは明示的に 400 で拒否する（共有 Zod スキーマ / repository は不変更）。
+ */
+function hasStageInput(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "stage" in body;
+}
+
 /**
  * GET /api/candidates — 一覧。
  * クエリ `?stage=&sortBy=&minEvidence=` を repository.list のフィルタへマップする。
@@ -60,8 +81,10 @@ export async function GET(request: Request): Promise<Response> {
 /**
  * POST /api/candidates — 作成。
  * リクエストボディを CandidateCreate として repository に渡す（検証は repository の Zod）。
- * 派生スコアは作成時に触らない（saveScores 専用）。`stage='rejected'` は受け付けない（§15.1）。
- * JSON として不正なボディは 400、検証 NG は 400（issues 付き）、成功は 201 で { data }。
+ * 派生スコアは作成時に触らない（saveScores 専用）。stage 入力は受け付けない（昇格は task-21、
+ * 棄却は POST /reject、退役は DELETE が正規経路。§13 Out of scope / §15.1）。新規作成は常に
+ * 既定 stage（normalized）になる。JSON として不正なボディは 400、stage 指定は 400、
+ * 検証 NG は 400（issues 付き）、成功は 201 で { data }。
  */
 export async function POST(request: Request): Promise<Response> {
   let body: unknown;
@@ -72,6 +95,10 @@ export async function POST(request: Request): Promise<Response> {
       { error: { message: "リクエストボディの JSON が不正です" } },
       { status: 400 },
     );
+  }
+  // stage 昇格の迂回を塞ぐ: 作成時に stage は指定させない（既定 normalized 固定）。
+  if (hasStageInput(body)) {
+    return Response.json(STAGE_FORBIDDEN_BODY, { status: 400 });
   }
   try {
     const data = await candidateRepo.create(body as CandidateCreate);

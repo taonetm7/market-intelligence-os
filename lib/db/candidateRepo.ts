@@ -60,9 +60,16 @@ export type CandidateRecord = Candidate & {
   detailedInputs: Record<string, number> | null;
 };
 
-/** 一覧の各行。紐付け証拠数（Evidence 件数）を付与する（§9.4 のカラム）。 */
+/** 一覧の各行。紐付け証拠数と一次ソース種別の異なり数を付与する（§9.4 のカラム）。 */
 export type CandidateListItem = CandidateRecord & {
+  /** 紐付く Evidence の件数。 */
   evidenceCount: number;
+  /**
+   * Evidence の一次ソース（RawSignal.sourceType）の異なり数（§9.4 distinctSources）。
+   * 多面性の指標（同一ソース種別の多重計上で過大評価しないよう「種別の数」を数える）。
+   * 証拠 0 件なら 0。evidenceRepo.signalStatsByCandidate.distinctSourceTypes と同義。
+   */
+  distinctSources: number;
 };
 
 /**
@@ -372,7 +379,8 @@ function orderByFor(sortBy?: CandidateSortBy): Prisma.CandidateOrderByWithRelati
  * sortBy で明示ソート（既定はスコア単独でなく createdAt 降順）。
  * minEvidence は Evidence 件数の下限フィルタ（Prisma の where では _count を直接
  * 比較できないため、件数を付与した上でアプリ層で絞る。単一ローカルユーザー前提で
- * 件数が小さいことを利用する）。各行に証拠数（evidenceCount）を付与する。
+ * 件数が小さいことを利用する）。各行に証拠数（evidenceCount）と一次ソース種別の
+ * 異なり数（distinctSources・§9.4）を付与する。
  */
 export async function list(
   filter: CandidateListFilter = {},
@@ -387,11 +395,19 @@ export async function list(
   const rows = await db.candidate.findMany({
     where,
     orderBy: orderByFor(sortBy),
-    include: { _count: { select: { evidences: true } } },
+    include: {
+      _count: { select: { evidences: true } },
+      // distinctSources（§9.4）= Evidence の一次ソース種別の異なり数。RawSignal.sourceType
+      // だけを nested select で薄く読み（他カラムは引かない）、下で Set により重複排除して
+      // 数える。ネストした include は Prisma が候補数によらず一定本数のクエリへバッチ化する
+      // ため、候補ごとに問い合わせる N+1 にはならない（_count と同じ findMany 1 回に同梱）。
+      evidences: { select: { rawSignal: { select: { sourceType: true } } } },
+    },
   });
-  const items = rows.map(({ _count, ...row }) => ({
+  const items = rows.map(({ _count, evidences, ...row }) => ({
     ...decode(row),
     evidenceCount: _count.evidences,
+    distinctSources: new Set(evidences.map((e) => e.rawSignal.sourceType)).size,
   }));
   if (filter.minEvidence !== undefined) {
     const min = filter.minEvidence;

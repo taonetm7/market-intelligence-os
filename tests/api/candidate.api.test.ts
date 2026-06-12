@@ -91,6 +91,9 @@ type CandidateData = {
   confidence: number | null;
   scoreConfigVersion: string | null;
   rejectedReasonCode: string | null;
+  // 一覧（list）系の応答にのみ付与される派生値（POST / GET 単体には無いので optional）。
+  evidenceCount?: number;
+  distinctSources?: number;
 };
 
 /** POST /api/candidates で 1 件作成し、作成された候補（data）を返す。 */
@@ -222,6 +225,32 @@ describe("Candidate CRUD", () => {
       new Request("http://localhost/api/candidates?stage=not_a_stage"),
     );
     expect(res.status).toBe(400);
+  });
+
+  // §9.4 カラム distinctSources: 各行に「一次ソース種別の異なり数」を載せて返す。
+  // Evidence 件数ではなく RawSignal.sourceType の異なり数（同一種別は 1 に畳む）であること、
+  // 証拠なしは 0 であることを検証する。
+  it("reports distinctSources (distinct primary-source types) per row", async () => {
+    const multi = await createCandidate({ title: "複数ソース種別" });
+    const rs1 = await makeRawSignal("app_store");
+    const rs2 = await makeRawSignal("review");
+    const rs3 = await makeRawSignal("app_store"); // 同一 sourceType（app_store）→ 1 に畳む
+    await linkEvidence(multi.id, rs1.id, "spend", 4);
+    await linkEvidence(multi.id, rs2.id, "dissatisfaction", 4);
+    await linkEvidence(multi.id, rs3.id, "search", 4);
+
+    const none = await createCandidate({ title: "証拠なし" });
+
+    const res = await candidatesRoute.GET(new Request("http://localhost/api/candidates"));
+    expect(res.status).toBe(200);
+    const data = ((await res.json()) as { data: CandidateData[] }).data;
+
+    const m = data.find((d) => d.id === multi.id);
+    // Evidence は 3 件だが sourceType は {app_store, review} の 2 種別 → distinctSources = 2。
+    expect(m?.distinctSources).toBe(2);
+    expect(m?.evidenceCount).toBe(3);
+    // 証拠が無ければ 0（"—" 表示の根拠）。
+    expect(data.find((d) => d.id === none.id)?.distinctSources).toBe(0);
   });
 
   it("updates a candidate (200) and 404 for a missing id", async () => {
@@ -436,5 +465,7 @@ describe("GET /api/candidates/top100", () => {
     expect(ids).not.toContain(b.id);
     expect(ids).not.toContain(c.id);
     expect(data).toHaveLength(1);
+    // top100 応答も §9.4 の distinctSources を載せる（seedStrongEvidence = app_store + review の 2 種別）。
+    expect(data[0].distinctSources).toBe(2);
   });
 });

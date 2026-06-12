@@ -29,8 +29,9 @@ export type CandidateRow = {
   detailedScore: number | null;
   confidence: number | null;
   /**
-   * Evidence の異なるソース種別数（§9.4 のカラム）。一覧 API が現状この派生値を
-   * 返さない場合は null（"—" 表示）。提供されれば表示する。
+   * Evidence の一次ソース種別の異なり数（§9.4 のカラム）。一覧 API（/api/candidates・
+   * /api/candidates/top100）が集計して返す。型上は null も許容し（API 未提供の経路への
+   * 防御）、その場合は "—" 表示へフォールバックする。
    */
   distinctSources: number | null;
   nextAction: string | null;

@@ -352,6 +352,35 @@ describe("バックアップ/復元（§18.4）", () => {
     expect(before.candidates).toHaveLength(6);
   });
 
+  it("不整合バンドルで import が途中失敗しても、元データは無傷で残る（原子性・§18.4）", async () => {
+    // 取り込み前の完全な状態（往復一致が保証されている健全なバンドル）。
+    const before = await exportAll(db, FIXED_NOW);
+    const [sampleEvidence] = before.evidence;
+    if (sampleEvidence === undefined) throw new Error("前提: evidence が 1 件以上必要");
+
+    // version は正しいが、存在しない Candidate を参照する Evidence を 1 行混ぜた壊れたバンドル。
+    // 親（RawSignal/Candidate/ImportBatch）投入後、Evidence 投入で FK 違反 → 途中で失敗する。
+    const corruptEvidence = {
+      ...sampleEvidence,
+      id: "broken-evidence-row",
+      candidateId: "candidate-does-not-exist",
+    };
+    const corrupt = { ...before, evidence: [...before.evidence, corruptEvidence] };
+
+    // 取り込みは失敗する（FK 違反）。
+    await expect(importAll(corrupt, db)).rejects.toThrow();
+
+    // 失敗しても 1 件も失われず、全削除がロールバックされて元の状態に戻っている。
+    const after = await exportAll(db, FIXED_NOW);
+    expect(after.rawSignals).toEqual(before.rawSignals);
+    expect(after.candidates).toEqual(before.candidates);
+    expect(after.evidence).toEqual(before.evidence);
+    expect(after.importBatches).toEqual(before.importBatches);
+    expect(after.quarantineRows).toEqual(before.quarantineRows);
+    expect(after.scoreSnapshots).toEqual(before.scoreSnapshots);
+    expect(after.decisionLogs).toEqual(before.decisionLogs);
+  });
+
   it("backup-db で DB スナップショット（ファイルコピー）が取れる", () => {
     const dest = join(dbDir, "snapshot.db");
     const { src, dest: written } = backupDb({ databaseUrl: dbUrl, destPath: dest });

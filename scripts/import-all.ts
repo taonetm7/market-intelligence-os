@@ -8,6 +8,9 @@
 // - 依存を増やさない（@prisma/client のみ）。独自 loader フックは不要。
 // - 破壊操作（既存全削除）を伴うため、まず auto-snapshot として削除前件数を記録して返す
 //   （§18.4: bulk import 前に auto-snapshot）。フルバックアップは backup-db.ts。
+// - 原子性: 全削除 → 再投入を 1 つの $transaction で実行する。不整合バンドル（FK 違反・
+//   重複 id・必須欠落 等）で途中失敗しても丸ごとロールバックされ、元データが無傷で残る
+//   （DB が空 / 部分復元のまま壊れることがない）。失敗時は ImportBundleError 等を再送出する。
 // - 冪等: 取り込み前にコア/運用テーブルを FK 安全な順でクリアしてから入れ直す。
 //   同じバンドルを 2 回取り込んでも結果は同じ（件数が増えない）。
 // - id・タイムスタンプを含む全カラムを createMany でそのまま入れ、export と往復一致させる。
@@ -91,15 +94,68 @@ function reviveBundle(bundle: ExportBundle): Record<keyof typeof DATE_FIELDS, Re
  * 既存データを FK 安全な順でクリアする。
  * Evidence→RawSignal は onDelete: Restrict のため Evidence を先に消す。
  * Candidate/ImportBatch 子テーブルは Cascade だが、件数の決定性のため明示的に先に消す。
+ * トランザクションクライアント（tx）を受け取り、再投入と同一トランザクションで実行する。
  */
-async function clearAll(db: PrismaClient): Promise<void> {
-  await db.evidence.deleteMany();
-  await db.scoreSnapshot.deleteMany();
-  await db.decisionLog.deleteMany();
-  await db.quarantineRow.deleteMany();
-  await db.candidate.deleteMany();
-  await db.rawSignal.deleteMany();
-  await db.importBatch.deleteMany();
+async function clearAll(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.evidence.deleteMany();
+  await tx.scoreSnapshot.deleteMany();
+  await tx.decisionLog.deleteMany();
+  await tx.quarantineRow.deleteMany();
+  await tx.candidate.deleteMany();
+  await tx.rawSignal.deleteMany();
+  await tx.importBatch.deleteMany();
+}
+
+/**
+ * revive 済みバンドルを親 → 子 の順で createMany する（FK 制約を満たす）。
+ * clearAll と同一トランザクション（tx）で実行することで、途中失敗時は全削除ごと
+ * ロールバックされ、元データが無傷で残る。createMany は id・タイムスタンプ含む全カラムを
+ * そのまま受け取り保存する（export と往復一致する）。revive 済みの行は構造上それぞれの
+ * CreateManyInput に一致するが、JSON 由来の Record<string, unknown> なので明示キャストする。
+ */
+async function restoreAll(
+  tx: Prisma.TransactionClient,
+  data: Record<keyof typeof DATE_FIELDS, Record<string, unknown>[]>,
+): Promise<void> {
+  // RawSignal / Candidate / ImportBatch は他に依存しない。
+  if (data.rawSignals.length > 0) {
+    await tx.rawSignal.createMany({
+      data: data.rawSignals as unknown as Prisma.RawSignalCreateManyInput[],
+    });
+  }
+  if (data.candidates.length > 0) {
+    await tx.candidate.createMany({
+      data: data.candidates as unknown as Prisma.CandidateCreateManyInput[],
+    });
+  }
+  if (data.importBatches.length > 0) {
+    await tx.importBatch.createMany({
+      data: data.importBatches as unknown as Prisma.ImportBatchCreateManyInput[],
+    });
+  }
+  // Evidence は Candidate / RawSignal に依存。
+  if (data.evidence.length > 0) {
+    await tx.evidence.createMany({
+      data: data.evidence as unknown as Prisma.EvidenceCreateManyInput[],
+    });
+  }
+  // QuarantineRow は ImportBatch に依存。
+  if (data.quarantineRows.length > 0) {
+    await tx.quarantineRow.createMany({
+      data: data.quarantineRows as unknown as Prisma.QuarantineRowCreateManyInput[],
+    });
+  }
+  // ScoreSnapshot / DecisionLog は Candidate に依存。
+  if (data.scoreSnapshots.length > 0) {
+    await tx.scoreSnapshot.createMany({
+      data: data.scoreSnapshots as unknown as Prisma.ScoreSnapshotCreateManyInput[],
+    });
+  }
+  if (data.decisionLogs.length > 0) {
+    await tx.decisionLog.createMany({
+      data: data.decisionLogs as unknown as Prisma.DecisionLogCreateManyInput[],
+    });
+  }
 }
 
 /**
@@ -122,50 +178,12 @@ export async function importAll(
 
   const data = reviveBundle(bundle);
 
-  await clearAll(db);
-
-  // 親 → 子 の順で投入する（FK 制約を満たす）。createMany は id・タイムスタンプ含む全カラムを
-  // そのまま受け取り保存する（export と往復一致する）。revive 済みの行は構造上それぞれの
-  // CreateManyInput に一致するが、JSON 由来の Record<string, unknown> なので明示キャストする。
-  // RawSignal / Candidate / ImportBatch は他に依存しない。
-  if (data.rawSignals.length > 0) {
-    await db.rawSignal.createMany({
-      data: data.rawSignals as unknown as Prisma.RawSignalCreateManyInput[],
-    });
-  }
-  if (data.candidates.length > 0) {
-    await db.candidate.createMany({
-      data: data.candidates as unknown as Prisma.CandidateCreateManyInput[],
-    });
-  }
-  if (data.importBatches.length > 0) {
-    await db.importBatch.createMany({
-      data: data.importBatches as unknown as Prisma.ImportBatchCreateManyInput[],
-    });
-  }
-  // Evidence は Candidate / RawSignal に依存。
-  if (data.evidence.length > 0) {
-    await db.evidence.createMany({
-      data: data.evidence as unknown as Prisma.EvidenceCreateManyInput[],
-    });
-  }
-  // QuarantineRow は ImportBatch に依存。
-  if (data.quarantineRows.length > 0) {
-    await db.quarantineRow.createMany({
-      data: data.quarantineRows as unknown as Prisma.QuarantineRowCreateManyInput[],
-    });
-  }
-  // ScoreSnapshot / DecisionLog は Candidate に依存。
-  if (data.scoreSnapshots.length > 0) {
-    await db.scoreSnapshot.createMany({
-      data: data.scoreSnapshots as unknown as Prisma.ScoreSnapshotCreateManyInput[],
-    });
-  }
-  if (data.decisionLogs.length > 0) {
-    await db.decisionLog.createMany({
-      data: data.decisionLogs as unknown as Prisma.DecisionLogCreateManyInput[],
-    });
-  }
+  // 全削除 → 再投入を 1 つのトランザクションで原子的に実行する。途中で失敗（FK 違反・
+  // 重複 id・必須欠落 等）すると全削除ごとロールバックされ、元データが無傷で残る。
+  await db.$transaction(async (tx) => {
+    await clearAll(tx);
+    await restoreAll(tx, data);
+  });
 
   return {
     restored: {

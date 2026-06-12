@@ -27,14 +27,15 @@
 //   既存ログの re-parent を先に済ませてから新しい merge ログを刻むので、吸収側の merge
 //   ログは吸収側に残る（先に移送→後から記録の順序が重要）。
 //
-// 冪等性: 生存側＝吸収側、reason 空、存在しない候補は弾く。merge を二重実行しても、
-//   2 回目は吸収側に移送対象が無く archived の付け直しになるだけで履歴は壊れない。
+// 冪等性: 生存側＝吸収側、reason 空、存在しない候補は弾く。さらに吸収側が既に archived
+//   （＝統合済み）の場合は明示エラーで弾き、同一 merge の再実行で両者へ merge ログが
+//   二重に刻まれる（履歴の重複）のを防ぐ（task doc「全操作トランザクション・冪等性に注意」）。
 //
 // Out of scope: 重複サジェスト（task-34）/ UI（task-31）/ auto-snapshot（§18.4）。
 
 import { type PrismaClient } from "@prisma/client";
 
-import { decisionTypeSchema, type Stage } from "../validation/enums";
+import { decisionTypeSchema, stageSchema, type Stage } from "../validation/enums";
 import { prisma } from "./client";
 import { log } from "./decisionLogRepo";
 import { nextCandidateDisplayId } from "./displayId";
@@ -119,6 +120,16 @@ export async function merge(args: MergeArgs, db: CandidateMergeDb = prisma): Pro
     }
     if (absorbed === null) {
       throw new Error(`merge 吸収側の Candidate が存在しません: ${absorbedId}`);
+    }
+
+    // 冪等性ガード（§15.2 / task doc「全操作トランザクション・冪等性に注意」）。吸収側が
+    // 既に archived の場合、その候補は統合済み（中身は他所へ移送済み）。ここで再び merge を
+    // 走らせると、移送対象が無いまま両者へ DecisionLog(merge) が二重に刻まれ履歴が重複する。
+    // reason 空・同一 id・候補不在と同じく不正な前提条件として明示エラーで弾く（no-op で
+    // 0 件成功を返すと、誤った survivor を渡した呼び出しバグを隠蔽しうるため throw を選ぶ）。
+    // enum 値は task-02 の Zod スキーマ経由で参照し直書きを避ける。
+    if (absorbed.stage === stageSchema.enum.archived) {
+      throw new Error(`merge 吸収側は既に archived です（統合済み）。再 merge できません: ${absorbedId}`);
     }
 
     // Evidence を再親付け。生存側に同一キー（rawSignalId×evidenceType）が既にある場合は

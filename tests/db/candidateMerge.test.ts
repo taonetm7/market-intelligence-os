@@ -199,6 +199,38 @@ describe("candidateMerge.merge", () => {
     );
     expect(bMergeWithCAfter).toHaveLength(1);
   });
+
+  it("guards against re-merging an already-archived candidate (idempotency)", async () => {
+    // 同一 merge 再実行の回帰テスト（Codex 確認 NG）。吸収側は初回 merge で archived に
+    // なる。同じ吸収側に対して merge をもう一度呼ぶと、移送対象が無いまま両者へ
+    // DecisionLog(merge) が二重に刻まれ履歴が重複する。archived な吸収側は明示エラーで
+    // 弾き、重複履歴を防ぐ。
+    const survivor = await candidateRepo.create(candidateFixture({ title: "生存側" }), db);
+    const absorbed = await candidateRepo.create(candidateFixture({ title: "吸収側" }), db);
+
+    await candidateMerge.merge(
+      { survivorId: survivor.id, absorbedId: absorbed.id, reason: "重複候補を統合" },
+      db,
+    );
+
+    // 再実行（吸収側は既に archived）は明示エラーで弾かれる。
+    await expect(
+      candidateMerge.merge(
+        { survivorId: survivor.id, absorbedId: absorbed.id, reason: "誤って再統合" },
+        db,
+      ),
+    ).rejects.toThrow();
+
+    // merge ログは両者とも 1 件のまま（重複しない）。
+    const survivorMerges = (await decisionLogRepo.listByCandidate(survivor.id, db)).filter(
+      (l) => l.decisionType === "merge",
+    );
+    const absorbedMerges = (await decisionLogRepo.listByCandidate(absorbed.id, db)).filter(
+      (l) => l.decisionType === "merge",
+    );
+    expect(survivorMerges).toHaveLength(1);
+    expect(absorbedMerges).toHaveLength(1);
+  });
 });
 
 describe("candidateMerge.split", () => {

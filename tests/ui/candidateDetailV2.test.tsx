@@ -47,6 +47,12 @@ import {
   submitMerge,
   submitSplit,
 } from "../../components/candidate/MergeSplitDialog";
+import {
+  CandidateSummary,
+  candidateEndpoint,
+  fetchCandidate,
+  type CandidateDetailData,
+} from "../../components/candidate/CandidateDetail";
 
 // task-31 Candidate 詳細 v2（spec v2 §8.4-8.7 / §9.4 / §9.5 / §15.2-15.3）。
 // テスト基盤に DOM/インタラクション依存は足さない方針のため、ロジック（入力組立・送信・アドバイス
@@ -484,5 +490,108 @@ describe("MergeSplitDialog: 送信（fetcher DI）", () => {
     await expect(
       submitMerge("c1", { absorbedId: "c2", reason: "重複" }, fetcher),
     ).rejects.toThrow("archived");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task-31 Phase 2（Codexレビュー指摘対応）: v2 書込後に既存 CandidateDetail 本体が stale にならない
+// 回帰テスト。page.tsx は v2 書込（detailedScore/promote/merge/split）で reload を +1 し、それを
+// CandidateDetail.reloadSignal へ配線する。reloadSignal 変化で CandidateDetail.load() が再実行され、
+// 本体の stage/score/Evidence が最新化される（§9.5: 判断の文脈を割らず即時反映）。
+// DOM/インタラクション非依存方針のため（task-22 Phase 2 と同流儀）、UI の reloadSignal 効果そのもの
+// ではなく、それが依拠する「v2 書込 → 候補を取り直す → 本体が最新値を描画する」データ経路を
+// fetcher DI で end-to-end に検証する。
+describe("task-31 Phase 2: v2 書込後に CandidateDetail 本体が最新化される（stale 解消）", () => {
+  /** CandidateDetailData を base から組む（テストで触らないフィールドは固定）。 */
+  function makeCandidate(overrides: Partial<CandidateDetailData>): CandidateDetailData {
+    return {
+      id: "c1",
+      displayId: "CND-1",
+      title: "候補",
+      stage: "top100",
+      problemFamily: null,
+      targetUser: null,
+      contextTrigger: null,
+      painStatement: null,
+      currentSubstitute: null,
+      spendType: null,
+      monetizationGuess: null,
+      productFormFit: [],
+      nextAction: null,
+      initialScore: 60,
+      detailedScore: null,
+      confidence: null,
+      legalRisk: null,
+      opsRisk: null,
+      initialInputs: null,
+      ...overrides,
+    };
+  }
+
+  /**
+   * 候補の状態を保持する擬似 API。POST scoring/detailed（v2 書込）で detailedScore/confidence を更新し、
+   * その後の GET /api/candidates/[id] は更新後の値を返す。実 API の「詳細採点 → 候補へ反映」契約を最小に模す。
+   */
+  function makeStatefulCandidateApi() {
+    let candidate = makeCandidate({});
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (url.includes("/scoring/detailed")) {
+        void init;
+        // v2 書込: detailedScore/confidence を更新する（実 API と同様に候補へ反映）。
+        candidate = { ...candidate, detailedScore: 72, confidence: 0.8 };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              candidate: { id: candidate.id },
+              detailedScore: 72,
+              signalBonus: 5,
+              uncertaintyPenalty: 0,
+              totalForGate: 77,
+              confidence: 0.8,
+              gate: { pass: true, reasons: [] },
+            },
+          }),
+        } as unknown as Response;
+      }
+      if (url.endsWith("/evidence")) {
+        return { ok: true, status: 200, json: async () => ({ data: [] }) } as unknown as Response;
+      }
+      // GET /api/candidates/[id]: 現在の候補（更新後）を返す。
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: candidate }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    return { fetcher };
+  }
+
+  it("詳細採点（v2 書込）後に候補を取り直すと detailedScore/confidence が最新化される", async () => {
+    const { fetcher } = makeStatefulCandidateApi();
+
+    // 1) 書込前: 本体は initialScore のみ、detailedScore/confidence は未設定。
+    const before = await fetchCandidate("c1", fetcher);
+    expect(before.detailedScore).toBeNull();
+    expect(before.confidence).toBeNull();
+    expect(renderToStaticMarkup(<CandidateSummary candidate={before} />)).not.toContain("72.0");
+
+    // 2) v2 書込: 詳細採点で detailedScore/confidence を更新する。
+    await submitDetailedScore("c1", { spend: 5 }, "enough", fetcher);
+
+    // 3) reloadSignal 変化で CandidateDetail.load() が走るのと同じ経路で候補を取り直す。
+    const after = await fetchCandidate("c1", fetcher);
+    expect(after.detailedScore).toBe(72);
+    expect(after.confidence).toBe(0.8);
+
+    // 本体（CandidateSummary）の描画も最新値を反映する（stale でない）。
+    const html = renderToStaticMarkup(<CandidateSummary candidate={after} />);
+    expect(html).toContain("72.0");
+    expect(html).toContain("0.80");
+  });
+
+  it("候補取得の endpoint は GET /api/candidates/[id]（CandidateDetail.load が叩く経路）", () => {
+    expect(candidateEndpoint("c1")).toBe("/api/candidates/c1");
   });
 });

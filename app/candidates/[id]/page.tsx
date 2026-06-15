@@ -37,8 +37,10 @@ export default function CandidateDetailPage() {
 
   return (
     <>
-      {/* task-21: 基本情報・Evidence・初期スコア・promote(top100)/reject。 */}
-      <CandidateDetail candidateId={id} />
+      {/* task-21: 基本情報・Evidence・初期スコア・promote(top100)/reject。
+          task-31: v2 書込（詳細採点・promote(top30)・統合/分割）後に reload を伝播し、本体の
+          stage/score/Evidence も最新化する（§9.5: 判断の文脈を割らず即時反映）。 */}
+      <CandidateDetail candidateId={id} reloadSignal={reload} />
 
       {id ? (
         <>

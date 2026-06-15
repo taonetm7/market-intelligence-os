@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { CandidateDetail } from "../../../components/candidate/CandidateDetail";
+import { ExportButton } from "../../../components/candidate/ExportButton";
 import { DetailedScorePanel } from "../../../components/candidate/DetailedScorePanel";
 import { CandidateScoreMatrix } from "../../../components/candidate/ScoreConfidenceMatrix";
 import { ScoreHistory } from "../../../components/candidate/ScoreHistory";
@@ -44,6 +45,12 @@ export default function CandidateDetailPage() {
 
       {id ? (
         <>
+          {/* task-32: エクスポート（§10.2 Markdown / §10.3 Deep Research）。コピー / ダウンロード。
+              読み取り専用の出力導線のため reload には依存しない（押下時に最新を取得する）。 */}
+          <div style={PANEL_STYLE}>
+            <ExportButton candidateId={id} />
+          </div>
+
           {/* task-31: 詳細スコア（Top30 ゲート可否）＋ promote(top30)。 */}
           <div style={PANEL_STYLE}>
             <DetailedScorePanel candidateId={id} onChanged={bumpReload} />

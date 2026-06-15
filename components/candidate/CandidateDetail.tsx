@@ -232,13 +232,22 @@ const PANEL_STYLE = {
   marginTop: 16,
 } as const;
 
-export type CandidateDetailProps = { candidateId: string };
+export type CandidateDetailProps = {
+  candidateId: string;
+  /**
+   * 外部（task-31 の v2 セクション）の書込操作（詳細採点／promote(top30)／merge／split）後に
+   * +1 される再取得信号。変化のたびに候補・Evidence を取り直し、本体の stage/score/Evidence を
+   * 最新化する（§9.5: 判断の文脈を割らず即時反映）。task-22 fe140f3 の ScoringPanel.reloadSignal と
+   * 同型。未指定なら 0 固定で、初回 load・candidateId 変化時 load の既存挙動だけが働く。
+   */
+  reloadSignal?: number;
+};
 
 /**
  * Candidate 詳細画面本体。基本情報・Evidence 一覧・Scoring パネル・promote/reject を 1 画面に
  * 集約する。操作（promote / reject / 採点）のたびに候補と Evidence を取り直して反映する。
  */
-export function CandidateDetail({ candidateId }: CandidateDetailProps) {
+export function CandidateDetail({ candidateId, reloadSignal = 0 }: CandidateDetailProps) {
   const [candidate, setCandidate] = useState<CandidateDetailData | null>(null);
   const [evidences, setEvidences] = useState<EvidenceRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -277,12 +286,14 @@ export function CandidateDetail({ candidateId }: CandidateDetailProps) {
     }
   }, [candidateId]);
 
-  // 初回マウントで取得する。setState を effect 本体から外へ出すためタイマ経由で実行する
-  // （task-19/20 と同じ流儀。cascading render 警告を避ける）。
+  // 初回マウント・candidateId 変化（load が変わる）・外部の v2 書込（reloadSignal が変わる）で
+  // 取得する。setState を effect 本体から外へ出すためタイマ経由で実行する（task-19/20 と同じ流儀。
+  // cascading render 警告を避ける）。reloadSignal を依存に加えても初回・candidateId 変化の既存挙動は
+  // そのまま働く（初期値 0 のため未配線時は再取得されない）。
   useEffect(() => {
     const timer = setTimeout(() => void load(), 0);
     return () => clearTimeout(timer);
-  }, [load]);
+  }, [load, reloadSignal]);
 
   /** 操作（promote / reject）を実行 → 成功なら通知して候補・Evidence を取り直す。 */
   const runAction = useCallback(

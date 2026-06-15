@@ -30,6 +30,7 @@ import {
 } from "../validation/schemas";
 import { prisma } from "./client";
 import { nextRawSignalDisplayId } from "./displayId";
+import { searchRawSignalIds } from "./search";
 
 /**
  * repository が受け取る Prisma クライアント。
@@ -58,7 +59,7 @@ export interface RawSignalListFilter {
   status?: string;
   /** Evidence が 0 件（＝どの Candidate にも紐付いていない inbox）だけを返す。 */
   unlinkedOnly?: boolean;
-  /** 全文検索。Slice 1 では contains（LIKE）。FTS5 は Slice 2（task-31）。 */
+  /** 全文検索（rawText / observedEntity）。task-33 で FTS5（trigram）へアップグレード。 */
   q?: string;
 }
 
@@ -191,14 +192,13 @@ export async function list(
   if (filter.status !== undefined) {
     where.status = statusSchema.parse(filter.status);
   }
-  if (filter.q !== undefined && filter.q !== "") {
-    const q = filter.q;
-    where.OR = [
-      { rawText: { contains: q } },
-      { observedEntity: { contains: q } },
-      { sourceName: { contains: q } },
-      { note: { contains: q } },
-    ];
+  if (filter.q !== undefined && filter.q.trim() !== "") {
+    // 全文検索は FTS5（trigram）経由（task-33）。rawText / observedEntity を索引し、マッチした
+    // RawSignal.id 集合で絞り込む（旧 contains/LIKE からの差し替え）。SQLite 固有は search.ts に
+    // 閉じ込め、ここは id 配列にしか依存しない（task-40 Postgres 移行時の切替点を局所化）。
+    // マッチ 0 件は `in: []` となり「該当なし」を表す。
+    const ids = await searchRawSignalIds(filter.q, db);
+    where.id = { in: ids };
   }
   if (filter.unlinkedOnly) {
     // task doc 定義: unlinkedOnly は「Evidence が0件の inbox」を返す（Codex 指摘2）。

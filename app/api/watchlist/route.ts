@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 
+import { candidateRepo } from "../../../lib/db/candidateRepo";
 import { watchlistRepo, type WatchlistListFilter } from "../../../lib/db/watchlistRepo";
 import type { WatchlistInput } from "../../../lib/validation/schemas";
 
@@ -22,6 +23,23 @@ function errorResponse(error: unknown): Response {
     );
   }
   return Response.json({ error: { message: "サーバ内部エラー" } }, { status: 500 });
+}
+
+/**
+ * linkedCandidateId が指定されていれば紐付け先 Candidate の存在を先に確認する（link-candidate route と同様式）。
+ * 不在なら 404 応答を返し、存在 / 未指定 / 空文字（切断）なら null を返す。
+ * これがないと FK 違反が repository から非 Zod エラーとして上がり、route が 500 に落としてしまう
+ * （Watchlist 自体の不在 404 とも区別できない）。
+ */
+async function linkedCandidateNotFound(linkedCandidateId: unknown): Promise<Response | null> {
+  if (typeof linkedCandidateId !== "string" || linkedCandidateId === "") return null;
+  if ((await candidateRepo.getById(linkedCandidateId)) === null) {
+    return Response.json(
+      { error: { message: "紐付け先の Candidate が見つかりません" } },
+      { status: 404 },
+    );
+  }
+  return null;
 }
 
 /**
@@ -61,6 +79,12 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
   try {
+    // 紐付け先 candidate を先に存在確認（不在は FK 500 でなく 404 に翻訳）。
+    const notFound = await linkedCandidateNotFound(
+      (body as { linkedCandidateId?: unknown }).linkedCandidateId,
+    );
+    if (notFound !== null) return notFound;
+
     const data = await watchlistRepo.create(body as WatchlistInput);
     return Response.json({ data }, { status: 201 });
   } catch (error) {

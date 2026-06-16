@@ -18,10 +18,27 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { candidateRepo } from "../../../../lib/db/candidateRepo";
 import { watchlistRepo, type WatchlistUpdate } from "../../../../lib/db/watchlistRepo";
 
 /** id が指す Watchlist が存在しないときの共通 404 ボディ。 */
 const NOT_FOUND_BODY = { error: { message: "Watchlist が見つかりません" } } as const;
+
+/**
+ * linkedCandidateId が指定されていれば紐付け先 Candidate の存在を先に確認する（route.ts の POST と同様式）。
+ * 不在なら「紐付け先の Candidate が見つかりません」404 を返す（Watchlist 自体の不在 404 と区別する）。
+ * 未指定 / 空文字（切断）は確認不要で null を返す。
+ */
+async function linkedCandidateNotFound(linkedCandidateId: unknown): Promise<Response | null> {
+  if (typeof linkedCandidateId !== "string" || linkedCandidateId === "") return null;
+  if ((await candidateRepo.getById(linkedCandidateId)) === null) {
+    return Response.json(
+      { error: { message: "紐付け先の Candidate が見つかりません" } },
+      { status: 404 },
+    );
+  }
+  return null;
+}
 
 /** ZodError → 400、Prisma P2025 → 404、それ以外 → 500 に翻訳する共通応答。 */
 function errorResponse(error: unknown): Response {
@@ -73,6 +90,16 @@ export async function PUT(request: Request, ctx: RouteContext): Promise<Response
     );
   }
   try {
+    // path エンティティ（Watchlist）→ 紐付け先（Candidate）の順で存在確認し、両 404 を区別する。
+    // Watchlist 不在は「Watchlist が見つかりません」、candidate 不在は専用メッセージ（FK 500 でなく 404）。
+    if ((await watchlistRepo.getById(id)) === null) {
+      return Response.json(NOT_FOUND_BODY, { status: 404 });
+    }
+    const notFound = await linkedCandidateNotFound(
+      (body as { linkedCandidateId?: unknown }).linkedCandidateId,
+    );
+    if (notFound !== null) return notFound;
+
     const data = await watchlistRepo.update(id, body as WatchlistUpdate);
     return Response.json({ data }, { status: 200 });
   } catch (error) {

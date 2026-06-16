@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   decisionTypeSchema,
+  deltaFlagSchema,
   evidenceTypeSchema,
   originSchema,
   rejectedReasonCodeSchema,
@@ -9,6 +10,7 @@ import {
   stageSchema,
   statusSchema,
   sourceTypeSchema,
+  watchlistEntityTypeSchema,
 } from "./enums";
 
 // Entity input schemas (task-02).
@@ -153,3 +155,24 @@ export const decisionInputSchema = z.object({
   reason: z.string().min(1),
 });
 export type DecisionInput = z.infer<typeof decisionInputSchema>;
+
+// ---------------------------------------------------------------------------
+// WatchlistInput (§9.8 / フィールドは §7.7)
+// 定点観測対象の前回値・今回値・差分。v1 は手動入力（自動取得は §18.3 で out of scope）。
+// lastValue / currentValue は単位や表記が様々（"1位" / "¥500" / "3.5"）なので String で持ち、
+// 差分方向（deltaFlag）は repository の updateValue が数値比較で算出する。
+// ---------------------------------------------------------------------------
+
+export const watchlistInputSchema = z.object({
+  entityType: watchlistEntityTypeSchema,
+  entityName: z.string().min(1),
+  locale: z.string().optional(),
+  metricName: z.string().optional(),
+  lastValue: z.string().optional(),
+  currentValue: z.string().optional(),
+  deltaFlag: deltaFlagSchema.default("unknown"),
+  lastCheckedAt: z.coerce.date().optional(),
+  linkedCandidateId: z.string().optional(),
+  note: z.string().optional(),
+});
+export type WatchlistInput = z.infer<typeof watchlistInputSchema>;

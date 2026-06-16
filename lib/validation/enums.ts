@@ -105,3 +105,21 @@ export const REJECTED_REASON_CODE_VALUES = [
 ] as const;
 export const rejectedReasonCodeSchema = z.enum(REJECTED_REASON_CODE_VALUES);
 export type RejectedReasonCode = z.infer<typeof rejectedReasonCodeSchema>;
+
+// Watchlist.entityType — 定点観測対象の種別 (§9.8)
+export const WATCHLIST_ENTITY_TYPE_VALUES = [
+  "competitor_app",
+  "keyword",
+  "ranking",
+  "template_sale",
+  "outsource_category",
+  "regulation_page",
+  "plugin",
+] as const;
+export const watchlistEntityTypeSchema = z.enum(WATCHLIST_ENTITY_TYPE_VALUES);
+export type WatchlistEntityType = z.infer<typeof watchlistEntityTypeSchema>;
+
+// Watchlist.deltaFlag — 前回値→今回値の差分方向 (§9.8)。数値比較で算出、比較不能/初回は unknown。
+export const DELTA_FLAG_VALUES = ["up", "down", "unchanged", "unknown"] as const;
+export const deltaFlagSchema = z.enum(DELTA_FLAG_VALUES);
+export type DeltaFlag = z.infer<typeof deltaFlagSchema>;

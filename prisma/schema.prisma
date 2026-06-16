@@ -82,6 +82,7 @@ model Candidate {
   evidences      Evidence[]
   scoreSnapshots ScoreSnapshot[]
   decisionLogs   DecisionLog[]
+  watchlists     Watchlist[]
 
   @@index([stage])
   @@index([rejectedReasonCode])
@@ -186,4 +187,29 @@ model DuplicateDismissal {
   dismissedAt  DateTime @default(now())
 
   @@index([pairKey])
+}
+
+// Watchlist（task-36, §9.8 / フィールドは §7.7）— 定点観測対象の前回値・今回値・差分。
+// v1 は手動入力（スクレイピング等の自動取得は §18.3 で out of scope）。entityType / deltaFlag は
+// SQLite に enum が無いため String で持ち、app 層（Zod・task-02）で検証する。linkedCandidate は
+// 任意リレーション（候補に紐付かない観測もあるため nullable・候補削除時は SetNull）。
+model Watchlist {
+  id                String    @id @default(cuid())
+  entityType        String
+  entityName        String
+  locale            String?
+  metricName        String?
+  lastValue         String?
+  currentValue      String?
+  deltaFlag         String    @default("unknown")
+  lastCheckedAt     DateTime?
+  linkedCandidateId String?
+  note              String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  linkedCandidate Candidate? @relation(fields: [linkedCandidateId], references: [id], onDelete: SetNull)
+
+  @@index([entityType])
+  @@index([linkedCandidateId])
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   decisionTypeSchema,
+  deltaFlagSchema,
   evidenceTypeSchema,
   originSchema,
   rejectedReasonCodeSchema,
@@ -9,6 +10,7 @@ import {
   stageSchema,
   statusSchema,
   sourceTypeSchema,
+  watchlistEntityTypeSchema,
 } from "./enums";
 
 // Entity input schemas (task-02).
@@ -153,3 +155,28 @@ export const decisionInputSchema = z.object({
   reason: z.string().min(1),
 });
 export type DecisionInput = z.infer<typeof decisionInputSchema>;
+
+// ---------------------------------------------------------------------------
+// WatchlistInput (§9.8 / フィールドは §7.7)
+// 定点観測対象の前回値・今回値・差分。v1 は手動入力（自動取得は §18.3 で out of scope）。
+// lastValue / currentValue は単位や表記が様々（"1位" / "¥500" / "3.5"）なので String で持ち、
+// 差分方向（deltaFlag）は repository の updateValue が数値比較で算出する。
+// ---------------------------------------------------------------------------
+
+export const watchlistInputSchema = z.object({
+  entityType: watchlistEntityTypeSchema,
+  entityName: z.string().min(1),
+  locale: z.string().optional(),
+  metricName: z.string().optional(),
+  lastValue: z.string().optional(),
+  currentValue: z.string().optional(),
+  deltaFlag: deltaFlagSchema.default("unknown"),
+  lastCheckedAt: z.coerce.date().optional(),
+  // 紐付け先 Candidate の id。空文字 "" は不正入力として弾く（.min(1)）。
+  // "" を許すと repository が FK にそのまま渡し、存在しない candidate 参照として Prisma の FK 違反
+  // （非 Zod エラー）→ route が 500 に倒してしまう。検証層で 400 に寄せ、POST/PUT を一貫させる。
+  // 紐付け無しは「フィールド省略（undefined）」で表す。
+  linkedCandidateId: z.string().min(1).optional(),
+  note: z.string().optional(),
+});
+export type WatchlistInput = z.infer<typeof watchlistInputSchema>;

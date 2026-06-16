@@ -170,3 +170,20 @@ model DecisionLog {
 
   @@index([candidateId])
 }
+
+// Duplicate Review（task-35, §9.7）の抑制フラグ。
+// 「Keep Separate / Not Duplicate」で人間が「このペアは重複でない」と判断した記録。
+// 重複サジェスト（GET /api/duplicates）はこの記録に載るペアを一覧から除外する
+// （リロード/再訪問・再取得でも復活させない）。pairKey は 2 候補 ID を整列・結合した
+// 無向ペアの安定キー（左右の順序に依らず一意）。kind は app 層（Zod）で検証する。
+model DuplicateDismissal {
+  id           String   @id @default(cuid())
+  pairKey      String   @unique
+  candidateAId String
+  candidateBId String
+  kind         String
+  reason       String?
+  dismissedAt  DateTime @default(now())
+
+  @@index([pairKey])
+}

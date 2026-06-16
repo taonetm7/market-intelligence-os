@@ -18,6 +18,7 @@
 import { z } from "zod";
 
 import { duplicateRepo, type DuplicateOptions } from "../../../lib/db/duplicateRepo";
+import { duplicateDismissalRepo, normalizePairKey } from "../../../lib/db/duplicateDismissalRepo";
 
 /** クエリ検証スキーマ（threshold は 0〜1、limit は正整数。未指定は repository の既定に委ねる）。 */
 const querySchema = z.object({
@@ -48,7 +49,10 @@ export async function GET(request: Request): Promise<Response> {
     if (parsed.data.threshold !== undefined) options.threshold = parsed.data.threshold;
     if (parsed.data.limit !== undefined) options.limit = parsed.data.limit;
 
-    const data = await duplicateRepo.suggestAll(options);
+    const pairs = await duplicateRepo.suggestAll(options);
+    // Keep Separate / Not Duplicate で抑制済みのペアは一覧から除外する（再取得でも復活させない）。
+    const dismissed = await duplicateDismissalRepo.listDismissedKeys();
+    const data = pairs.filter((p) => !dismissed.has(normalizePairKey(p.a.id, p.b.id)));
     return Response.json({ data }, { status: 200 });
   } catch {
     return Response.json({ error: { message: "サーバ内部エラー" } }, { status: 500 });

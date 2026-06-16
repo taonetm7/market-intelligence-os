@@ -7,14 +7,16 @@ import {
   DuplicatePairCard,
   pairKey,
   type DuplicatePairView,
-  type PairAction,
 } from "../../components/duplicate/DuplicatePairCard";
 
 // task-35 — Duplicate Review 画面（spec v2 §9.7）。
 // task-34 suggestAll（GET /api/duplicates）の似た候補ペアを一覧し、各ペアを左右に並べて
 // 一致理由をハイライトする。Merge / Split は task-30 API（カード内の submitMerge / submitSplit）
-// 経由で実行し、成功後に一覧を再取得する。Keep Separate / Not Duplicate はサジェストから
-// 抑制（最小実装＝クライアント側で一覧から除外。永続化はモデル追加が要るため別タスク）。
+// 経由・確認ダイアログを挟んで実行する。Keep Separate / Not Duplicate はサーバへ抑制を永続化する
+// （POST /api/duplicates/dismiss）。いずれの操作後も一覧を再取得する。
+//
+// 抑制は GET /api/duplicates 側で除外される（Phase 2 / Codex 指摘2）。リロード/再訪問・再取得でも
+// 復活しないため、クライアント側の一時的な除外フラグは持たない。
 
 /** 重複ペア一覧 API のエンドポイント。 */
 export const DUPLICATES_ENDPOINT = "/api/duplicates";
@@ -34,7 +36,7 @@ export function buildDuplicatesUrl(query: DuplicatesQuery = {}): string {
   return qs ? `${DUPLICATES_ENDPOINT}?${qs}` : DUPLICATES_ENDPOINT;
 }
 
-/** 重複ペアを取得する（fetcher DI）。!ok は例外。 */
+/** 重複ペアを取得する（fetcher DI）。!ok は例外。抑制済みは API 側で除外済み。 */
 export async function fetchDuplicatePairs(
   query: DuplicatesQuery = {},
   fetcher: typeof fetch = fetch,
@@ -47,22 +49,8 @@ export async function fetchDuplicatePairs(
   return body.data;
 }
 
-/** 抑制（Keep Separate / Not Duplicate）したペアを除いた表示対象。 */
-export function visiblePairs(
-  pairs: DuplicatePairView[],
-  dismissed: ReadonlySet<string>,
-): DuplicatePairView[] {
-  return pairs.filter((p) => !dismissed.has(pairKey(p)));
-}
-
-/** Merge / Split は再取得を要するアクション（候補のステージが変わるため）。 */
-export function isRefetchAction(action: PairAction): boolean {
-  return action === "merge" || action === "split";
-}
-
 export default function DuplicatesPage() {
   const [pairs, setPairs] = useState<DuplicatePairView[]>([]);
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -86,24 +74,11 @@ export default function DuplicatesPage() {
     return () => clearTimeout(timer);
   }, [load]);
 
-  const handleResolved = useCallback(
-    (action: PairAction, pair: DuplicatePairView) => {
-      if (isRefetchAction(action)) {
-        // Merge / Split 後はステージ変化で当該ペアが消えるため、一覧を取り直す。
-        void load();
-      } else {
-        // Keep Separate / Not Duplicate はクライアント側でこのペアを抑制する。
-        setDismissed((prev) => {
-          const next = new Set(prev);
-          next.add(pairKey(pair));
-          return next;
-        });
-      }
-    },
-    [load],
-  );
-
-  const visible = visiblePairs(pairs, dismissed);
+  // Merge / Split / 抑制（Keep Separate / Not Duplicate）いずれも、確定後に一覧を取り直す。
+  // 抑制は API 側で除外されるため、再取得すれば当該ペアは戻らない。
+  const handleResolved = useCallback(() => {
+    void load();
+  }, [load]);
 
   return (
     <>
@@ -116,12 +91,12 @@ export default function DuplicatesPage() {
           {error}
         </p>
       ) : null}
-      {visible.length === 0 ? (
+      {pairs.length === 0 ? (
         <p style={{ color: "#667085", fontSize: 13 }}>
           {loading ? "読み込み中…" : "重複候補ペアはありません"}
         </p>
       ) : (
-        visible.map((pair) => (
+        pairs.map((pair) => (
           <DuplicatePairCard key={pairKey(pair)} pair={pair} onResolved={handleResolved} />
         ))
       )}

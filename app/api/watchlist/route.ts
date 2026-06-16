@@ -26,10 +26,11 @@ function errorResponse(error: unknown): Response {
 }
 
 /**
- * linkedCandidateId が指定されていれば紐付け先 Candidate の存在を先に確認する（link-candidate route と同様式）。
- * 不在なら 404 応答を返し、存在 / 未指定 / 空文字（切断）なら null を返す。
- * これがないと FK 違反が repository から非 Zod エラーとして上がり、route が 500 に落としてしまう
+ * linkedCandidateId が **非空文字列で指定** されていれば紐付け先 Candidate の存在を先に確認する
+ * （link-candidate route と同様式）。不在なら 404 応答を返し、未指定（null/undefined）なら null を返す。
+ * これがないと存在しない candidate 参照が FK 違反として非 Zod で上がり、route が 500 に落としてしまう
  * （Watchlist 自体の不在 404 とも区別できない）。
+ * 空文字 "" は watchlistInputSchema の .min(1) が 400 で弾くため、ここでは素通しして後段の parse に委ねる。
  */
 async function linkedCandidateNotFound(linkedCandidateId: unknown): Promise<Response | null> {
   if (typeof linkedCandidateId !== "string" || linkedCandidateId === "") return null;

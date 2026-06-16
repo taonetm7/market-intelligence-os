@@ -25,9 +25,10 @@ import { watchlistRepo, type WatchlistUpdate } from "../../../../lib/db/watchlis
 const NOT_FOUND_BODY = { error: { message: "Watchlist が見つかりません" } } as const;
 
 /**
- * linkedCandidateId が指定されていれば紐付け先 Candidate の存在を先に確認する（route.ts の POST と同様式）。
- * 不在なら「紐付け先の Candidate が見つかりません」404 を返す（Watchlist 自体の不在 404 と区別する）。
- * 未指定 / 空文字（切断）は確認不要で null を返す。
+ * linkedCandidateId が **非空文字列で指定** されていれば紐付け先 Candidate の存在を先に確認する
+ * （route.ts の POST と同様式）。不在なら「紐付け先の Candidate が見つかりません」404 を返す
+ * （Watchlist 自体の不在 404 と区別する）。未指定（null/undefined）は確認不要で null を返す。
+ * 空文字 "" は watchlistInputSchema 由来の .min(1) が 400 で弾くため、ここでは素通しして後段の parse に委ねる。
  */
 async function linkedCandidateNotFound(linkedCandidateId: unknown): Promise<Response | null> {
   if (typeof linkedCandidateId !== "string" || linkedCandidateId === "") return null;

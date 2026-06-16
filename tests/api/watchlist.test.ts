@@ -115,6 +115,14 @@ describe("POST /api/watchlist", () => {
     expect(res.status).toBe(201);
     expect(await prisma.watchlist.count()).toBe(1);
   });
+
+  it("returns 400 (not 500) when linkedCandidateId is an empty string", async () => {
+    // 空文字は .min(1) で弾かれ、FK へ渡らず 500 にならない（Codex 追加指摘）。
+    const res = await listRoute.POST(postRequest(wlBody({ linkedCandidateId: "" })));
+    expect(res.status).toBe(400);
+    // 行が作られていないこと（FK 経路を踏んでいない）。
+    expect(await prisma.watchlist.count()).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,6 +154,16 @@ describe("PUT /api/watchlist/[id]", () => {
     // 原因が「紐付け先 candidate の不在」として区別されること（Watchlist 不在の誤変換でない）。
     expect(json.error.message).toContain("紐付け先");
     expect(json.error.message).toContain("Candidate");
+  });
+
+  it("returns 400 (not 500) when linkedCandidateId is an empty string", async () => {
+    // PUT も同じスキーマ派生を通るため、空文字は 400 になり FK 500 にならない（Codex 追加指摘）。
+    const wl = await createWatchlist();
+    const res = await itemRoute.PUT(putRequest({ linkedCandidateId: "" }), ctx(wl.id));
+    expect(res.status).toBe(400);
+    // 既存行の紐付けが書き換わっていないこと。
+    const fetched = await prisma.watchlist.findUnique({ where: { id: wl.id } });
+    expect(fetched?.linkedCandidateId).toBeNull();
   });
 
   it("updates with a valid linkedCandidateId and returns 200（正常系・退行確認）", async () => {

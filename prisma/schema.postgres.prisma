@@ -1,0 +1,225 @@
+// Prisma schema（Postgres 版）— task-40, spec v2 §6.3 / §18.7。
+//
+// これは prisma/schema.prisma（SQLite・既定）の Postgres 用ミラーである。Prisma は datasource の
+// provider に env() を使えない（P1012）ため、provider 切替は「どちらの schema ファイルで
+// generate / db push するか」で行う。DATABASE_PROVIDER=postgres のとき本ファイルを使う
+// （手順は docs/postgres-migration.md）。
+//
+// 重要・破壊的変更を最小にする方針:
+// - モデル/フィールドは schema.prisma と完全に一致させ、相違は datasource provider のみとする。
+//   そうすることで全件 JSON export→import（scripts/export-all・import-all）が provider 間で
+//   無変換のまま往復一致する（String/Float/Int/DateTime はそのまま移送できる）。
+// - enum 化 / jsonb 化は行わない（破壊的変更・往復非互換になるため。§Implementation notes の「検討」
+//   に対し、最小・非破壊を優先して見送る）。"enum" 相当は引き続き String + app 層 Zod 検証（task-02）。
+// - 全文検索の Postgres 実装（pg_trgm）は lib/db/search.ts に閉じ込め、ここには持たない。
+//
+// 本ファイルと schema.prisma は必ず同期させること（相違は下の datasource provider 行だけ）。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model RawSignal {
+  id              String   @id @default(cuid())
+  displayId       String   @unique
+  addedAt         DateTime @default(now())
+  sourceType      String
+  sourceName      String?
+  sourceUrl       String?
+  country         String?
+  language        String?
+  rawText         String
+  observedEntity  String?
+  observedPrice   String?
+  observedRank    String?
+  observedRating  Float?
+  observedReviews Int?
+  observedUpdate  DateTime?
+  signalTagsJson  String?   @default("[]")
+  extraJson       String?   @default("{}")
+  note            String?
+  origin          String    @default("manual") // manual | import | ai
+  status          String    @default("inbox") // inbox | ignored | archived
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  evidences Evidence[]
+
+  @@index([sourceType])
+  @@index([status])
+  @@index([observedEntity])
+}
+
+model Candidate {
+  id                 String   @id @default(cuid())
+  displayId          String   @unique
+  problemFamily      String?
+  title              String
+  targetUser         String?
+  contextTrigger     String?
+  painStatement      String?
+  currentSubstitute  String?
+  spendType          String?
+  monetizationGuess  String?
+  productFormFitJson String?  @default("[]")
+  initialInputsJson  String?  @default("{}") // InitialScore の素点
+  detailedInputsJson String?  @default("{}") // 詳細スコア12軸の素点
+  founderFit         Int?
+  buildEase          Int?
+  legalRisk          Int?
+  opsRisk            Int?
+  initialScore       Float?
+  detailedScore      Float?
+  signalBonus        Float?
+  uncertaintyPenalty Float?
+  confidence         Float?
+  scoreConfigVersion String?
+  stage              String   @default("normalized")
+  testableWithinDays Int?
+  testMethod         String?
+  nextAction         String?
+  rejectedReason     String?
+  rejectedReasonCode String?
+  origin             String   @default("manual")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  evidences      Evidence[]
+  scoreSnapshots ScoreSnapshot[]
+  decisionLogs   DecisionLog[]
+  watchlists     Watchlist[]
+
+  @@index([stage])
+  @@index([rejectedReasonCode])
+}
+
+model Evidence {
+  id           String   @id @default(cuid())
+  candidateId  String
+  rawSignalId  String // 必須（一次ソース）
+  evidenceType String
+  strength     Int
+  credibility  Int      @default(3)
+  note         String?
+  createdAt    DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  rawSignal RawSignal @relation(fields: [rawSignalId], references: [id], onDelete: Restrict)
+
+  @@unique([candidateId, rawSignalId, evidenceType])
+  @@index([candidateId])
+}
+
+// import の隔離（quarantine）バッチ — task-15, spec v2 §10.1。
+// import 行を即本登録せず、まずこの運用テーブルへ隔離する。§7 のコア5とは別系統。
+// v1 で「幽霊」として削除した ImportBatch とは別物（こちらは隔離の実体を持つ）。
+model ImportBatch {
+  id        String   @id @default(cuid())
+  origin    String   @default("import") // import | ai（§10.1 step4 / §11.2）
+  format    String // json | csv（受領フォーマット）
+  note      String?
+  createdAt DateTime @default(now())
+
+  rows QuarantineRow[]
+
+  @@index([createdAt])
+}
+
+// 隔離された 1 行 — task-15, spec v2 §10.1。
+// status: pending（valid・accept 待ち）/ invalid（検証 NG・accept 不可）/ accepted（本登録済み）。
+// payloadJson は valid 行の RawSignalInput を直列化（SQLite に JSON 型が無いため）。
+// errorsJson は invalid 行の理由配列。rawSignalId は accept 後に作られた RawSignal の id。
+model QuarantineRow {
+  id          String   @id @default(cuid())
+  batchId     String
+  rowNumber   Int // パーサ由来の行番号（JSON=配列位置 / CSV=物理行 / 0=全体エラー）
+  status      String   @default("pending") // pending | invalid | accepted
+  payloadJson String? // valid 行の RawSignalInput（accept で本登録する元データ）
+  errorsJson  String? // invalid 行の検証エラー理由（行番号＋理由の表示用）
+  rawSignalId String? // accept 後に紐付く RawSignal の id（本登録の証跡）
+  createdAt   DateTime @default(now())
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([status])
+}
+
+model ScoreSnapshot {
+  id                 String   @id @default(cuid())
+  candidateId        String
+  snapshotAt         DateTime @default(now())
+  initialScore       Float?
+  detailedScore      Float?
+  signalBonus        Float?
+  uncertaintyPenalty Float?
+  confidence         Float?
+  configVersion      String?
+  reason             String?
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+model DecisionLog {
+  id                 String   @id @default(cuid())
+  candidateId        String
+  decisionType       String
+  fromStage          String?
+  toStage            String?
+  relatedCandidateId String?
+  reason             String
+  decidedAt          DateTime @default(now())
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+}
+
+// Duplicate Review（task-35, §9.7）の抑制フラグ。
+// 「Keep Separate / Not Duplicate」で人間が「このペアは重複でない」と判断した記録。
+// 重複サジェスト（GET /api/duplicates）はこの記録に載るペアを一覧から除外する
+// （リロード/再訪問・再取得でも復活させない）。pairKey は 2 候補 ID を整列・結合した
+// 無向ペアの安定キー（左右の順序に依らず一意）。kind は app 層（Zod）で検証する。
+model DuplicateDismissal {
+  id           String   @id @default(cuid())
+  pairKey      String   @unique
+  candidateAId String
+  candidateBId String
+  kind         String
+  reason       String?
+  dismissedAt  DateTime @default(now())
+
+  @@index([pairKey])
+}
+
+// Watchlist（task-36, §9.8 / フィールドは §7.7）— 定点観測対象の前回値・今回値・差分。
+// v1 は手動入力（スクレイピング等の自動取得は §18.3 で out of scope）。entityType / deltaFlag は
+// SQLite に enum が無いため String で持ち、app 層（Zod・task-02）で検証する。linkedCandidate は
+// 任意リレーション（候補に紐付かない観測もあるため nullable・候補削除時は SetNull）。
+model Watchlist {
+  id                String    @id @default(cuid())
+  entityType        String
+  entityName        String
+  locale            String?
+  metricName        String?
+  lastValue         String?
+  currentValue      String?
+  deltaFlag         String    @default("unknown")
+  lastCheckedAt     DateTime?
+  linkedCandidateId String?
+  note              String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  linkedCandidate Candidate? @relation(fields: [linkedCandidateId], references: [id], onDelete: SetNull)
+
+  @@index([entityType])
+  @@index([linkedCandidateId])
+}

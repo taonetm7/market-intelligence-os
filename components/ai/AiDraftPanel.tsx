@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 
+import { originSchema } from "../../lib/validation/enums";
 import { Button } from "../ui";
 
 // task-39 — AI 下書き（draft 提案）UI の共通部品（spec v2 §11）。
@@ -51,6 +52,49 @@ export async function fetchAiProposal(
   return { enabled: true, proposed: data.proposed };
 }
 
+/** AI 由来データを quarantine へ投入する import エンドポイント（task-15・既存）。 */
+export const QUARANTINE_INTAKE_URL = "/api/raw-signals/import";
+
+/** quarantine 投入の結果サマリ（batchId と件数）。人間が後で accept する導線に使う。 */
+export interface QuarantineIntakeSummary {
+  batchId: string;
+  pendingCount: number;
+  invalidCount: number;
+}
+
+/**
+ * AI 由来の RawSignal 下書きを quarantine へ **origin="ai"** で投入する（§11.2）。
+ * 既存 import エンドポイント（task-15）を呼ぶだけで、ここでも DB を直接は触らない。
+ * RawSignal は人間が quarantine を accept したときに初めて作られる（必ず関門を通す）。
+ * origin は直書きせず originSchema 経由（enum 直書き禁止）。fetcher は DI 可能。
+ */
+export async function submitProposalToQuarantine(
+  drafts: unknown[],
+  fetcher: typeof fetch = fetch,
+): Promise<QuarantineIntakeSummary> {
+  const res = await fetcher(QUARANTINE_INTAKE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      format: "json",
+      content: { rawSignals: drafts },
+      origin: originSchema.enum.ai,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`quarantine への投入に失敗しました（${res.status}）`);
+  }
+  const json = (await res.json()) as {
+    data?: { batch?: { id?: string }; pending?: unknown[]; invalid?: unknown[] };
+  };
+  const data = json.data ?? {};
+  return {
+    batchId: data.batch?.id ?? "",
+    pendingCount: data.pending?.length ?? 0,
+    invalidCount: data.invalid?.length ?? 0,
+  };
+}
+
 export interface AiDraftPanelProps {
   action: AiDraftAction;
   /** ボタン表示ラベル。 */
@@ -59,17 +103,31 @@ export interface AiDraftPanelProps {
   buildBody: () => unknown | null;
   /** 取得した proposed を描画する（提案表示専用）。 */
   renderProposed: (proposed: unknown) => ReactNode;
+  /**
+   * 任意: proposed を「quarantine へ送る RawSignal 下書き配列」に変換する。返すと
+   * 「quarantine へ送る（origin=ai）」導線が表示され、押下で {@link submitProposalToQuarantine} を
+   * 呼ぶ（§11.2 の draft→人間 accept 経路）。RawSignal を直接生成する画面でのみ渡す。
+   * null を返すと投入できない（未充足）。未指定なら導線を出さない（提案表示のみ）。
+   */
+  buildQuarantineDrafts?: (proposed: unknown) => unknown[] | null;
 }
 
 /**
  * 「AI下書き」ボタン + 提案表示。押下で /api/ai/[action] を叩き、proposed を提案として表示する。
  * DB へは自動反映しない（人間が手動で反映）。キー未設定時は無効である旨を表示し、エラーにしない。
  */
-export function AiDraftPanel({ action, label, buildBody, renderProposed }: AiDraftPanelProps) {
+export function AiDraftPanel({
+  action,
+  label,
+  buildBody,
+  renderProposed,
+  buildQuarantineDrafts,
+}: AiDraftPanelProps) {
   const [busy, setBusy] = useState(false);
   const [proposed, setProposed] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [intake, setIntake] = useState<QuarantineIntakeSummary | null>(null);
 
   async function run() {
     if (busy) return;
@@ -79,6 +137,7 @@ export function AiDraftPanel({ action, label, buildBody, renderProposed }: AiDra
     setError(null);
     setNotice(null);
     setProposed(null);
+    setIntake(null);
     try {
       const result = await fetchAiProposal(action, body);
       if (!result.enabled) {
@@ -89,6 +148,26 @@ export function AiDraftPanel({ action, label, buildBody, renderProposed }: AiDra
       setNotice("AI 下書き（提案）です。内容を確認し、人間が手動で反映してください（自動反映しません）。");
     } catch (e) {
       setError(e instanceof Error ? e.message : "AI 提案の取得に失敗しました");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendToQuarantine() {
+    if (busy || proposed === null || buildQuarantineDrafts === undefined) return;
+    const drafts = buildQuarantineDrafts(proposed);
+    if (drafts === null || drafts.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const summary = await submitProposalToQuarantine(drafts);
+      setIntake(summary);
+      setNotice(
+        `quarantine へ origin=ai で投入しました（batch: ${summary.batchId}）。` +
+          "実体（RawSignal）への反映は隔離レビューで人間が accept したときだけ行われます。",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "quarantine への投入に失敗しました");
     } finally {
       setBusy(false);
     }
@@ -120,6 +199,17 @@ export function AiDraftPanel({ action, label, buildBody, renderProposed }: AiDra
           }}
         >
           {renderProposed(proposed)}
+          {buildQuarantineDrafts !== undefined ? (
+            <div style={{ marginTop: 8 }}>
+              <Button
+                variant="secondary"
+                disabled={busy || intake !== null}
+                onClick={() => void sendToQuarantine()}
+              >
+                {intake !== null ? "quarantine 投入済み" : "quarantine へ送る（origin=ai）"}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

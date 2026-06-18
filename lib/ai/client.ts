@@ -87,26 +87,40 @@ export function createAiComplete(deps: AiClientDeps = {}): AiComplete {
     const model = deps.model ?? DEFAULT_AI_MODEL;
     const baseUrl = deps.baseUrl ?? DEFAULT_BASE_URL;
 
-    const res = await fetcher(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_API_VERSION,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens ?? 2048,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    // 通信失敗（タイムアウト / DNS / ネットワーク断）は上流（Claude 側）起因の失敗として扱う。
+    // route はこれを 502 に翻訳する（呼び出し側の 500 にしない・指摘②）。
+    // 秘密情報（apiKey / 送信ボディ）はメッセージに載せない。
+    let res: Response;
+    try {
+      res = await fetcher(`${baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": ANTHROPIC_API_VERSION,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens ?? 2048,
+          system,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+    } catch {
+      throw new AiRequestError(502, "Claude API への接続に失敗しました（通信エラー）");
+    }
 
     if (!res.ok) {
       throw new AiRequestError(res.status, `Claude API エラー（HTTP ${res.status}）`);
     }
 
-    const json = (await res.json()) as MessagesResponse;
+    // 応答ボディが JSON として壊れている（上流の異常応答）も上流起因の失敗にする（指摘②）。
+    let json: MessagesResponse;
+    try {
+      json = (await res.json()) as MessagesResponse;
+    } catch {
+      throw new AiRequestError(502, "Claude API 応答を JSON として解釈できませんでした");
+    }
     // opus 4.8 は安全分類で stop_reason="refusal"（content 空）を返しうる。明示エラーにする。
     if (json.stop_reason === "refusal") {
       throw new AiRequestError(200, "Claude API がリクエストを拒否しました（refusal）");

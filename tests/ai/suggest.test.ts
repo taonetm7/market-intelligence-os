@@ -21,6 +21,7 @@ import {
 } from "../../lib/ai/suggest";
 import { originSchema } from "../../lib/validation/enums";
 import { batchOriginSchema } from "../../lib/import/quarantineRepo";
+import { submitProposalToQuarantine } from "../../components/ai/AiDraftPanel";
 import { POST } from "../../app/api/ai/[action]/route";
 
 /** 指定 JSON を text ブロックとして返す偽 complete を作る。呼び出し回数も数える。 */
@@ -94,6 +95,25 @@ describe("createAiComplete", () => {
       })) as unknown as typeof fetch;
     await expect(
       createAiComplete({ apiKey: "k", fetcher: refusalFetcher })({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(AiRequestError);
+  });
+
+  // 指摘②: 通信失敗（タイムアウト/ネットワーク断）と応答 JSON 破損は「上流起因の失敗」=
+  // AiRequestError に倒す（route で 502。呼び出し側の 500 にしない）。
+  it("通信失敗（fetcher が reject）は AiRequestError（上流起因）に倒す", async () => {
+    const networkFail = (async () => {
+      throw new TypeError("network down");
+    }) as unknown as typeof fetch;
+    await expect(
+      createAiComplete({ apiKey: "k", fetcher: networkFail })({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(AiRequestError);
+  });
+
+  it("応答ボディが壊れた JSON（2xx だが parse 不能）も AiRequestError に倒す", async () => {
+    const brokenBody = (async () =>
+      new Response("not json at all", { status: 200 })) as unknown as typeof fetch;
+    await expect(
+      createAiComplete({ apiKey: "k", fetcher: brokenBody })({ system: "s", prompt: "p" }),
     ).rejects.toBeInstanceOf(AiRequestError);
   });
 });
@@ -272,5 +292,76 @@ describe("POST /api/ai/[action]", () => {
     const body = (await res.json()) as { data: { origin: string; proposed: { tags: string[] } } };
     expect(body.data.origin).toBe("ai");
     expect(body.data.proposed.tags).toEqual(["a", "b"]);
+  });
+
+  // 指摘②: 上流（Claude）起因の失敗は 500 ではなく 502（Bad Gateway 相当）で返す。
+  it("通信失敗は 500 ではなく 502（上流エラー）で返す", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("network down");
+    });
+    const res = await post("tag-suggest", { text: "観測" });
+    expect(res.status).toBe(502);
+  });
+
+  it("AI 応答ボディが壊れた JSON のときも 500 ではなく 502 で返す", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response("not json at all", { status: 200 }),
+    );
+    const res = await post("tag-suggest", { text: "観測" });
+    expect(res.status).toBe(502);
+  });
+
+  it("AI 応答が JSON オブジェクトにならないときも 500 ではなく 502 で返す", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    // HTTP 応答は妥当だが、text ブロックの中身が JSON オブジェクトでない（AiResponseError → 502）。
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            content: [{ type: "text", text: "これは JSON ではありません" }],
+            stop_reason: "end_turn",
+          }),
+          { status: 200 },
+        ),
+    );
+    const res = await post("tag-suggest", { text: "観測" });
+    expect(res.status).toBe(502);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AiDraftPanel: AI 下書きを quarantine(origin=ai) へ送る配線（指摘①の UI 入口）
+// ---------------------------------------------------------------------------
+
+describe("submitProposalToQuarantine", () => {
+  it("既存 import エンドポイントへ origin=ai で RawSignal 下書きを POST する", async () => {
+    let captured: { url: string; body: { origin: string; content: { rawSignals: unknown[] } } } | null =
+      null;
+    const fetcher = (async (url: string, init: RequestInit) => {
+      captured = { url, body: JSON.parse(init.body as string) };
+      return new Response(
+        JSON.stringify({ data: { batch: { id: "batch-1" }, pending: [{}], invalid: [] } }),
+        { status: 201 },
+      );
+    }) as unknown as typeof fetch;
+
+    const drafts = [{ sourceType: "review", rawText: "AIタグ付き観測", tags: ["x"] }];
+    const summary = await submitProposalToQuarantine(drafts, fetcher);
+
+    expect(captured!.url).toBe("/api/raw-signals/import");
+    expect(captured!.body.origin).toBe(originSchema.enum.ai); // 直書きせず enum 経由
+    expect(captured!.body.content.rawSignals).toEqual(drafts);
+    expect(summary.batchId).toBe("batch-1");
+    expect(summary.pendingCount).toBe(1);
+  });
+
+  it("非 2xx は throw（quarantine 投入失敗を握り潰さない）", async () => {
+    const fetcher = (async () =>
+      new Response("err", { status: 500 })) as unknown as typeof fetch;
+    await expect(submitProposalToQuarantine([{}], fetcher)).rejects.toThrow();
   });
 });

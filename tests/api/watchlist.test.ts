@@ -174,4 +174,22 @@ describe("PUT /api/watchlist/[id]", () => {
     const json = (await res.json()) as { data: { linkedCandidateId: string } };
     expect(json.data.linkedCandidateId).toBe(cnd.id);
   });
+
+  it("disconnects the candidate when linkedCandidateId is null（解除導線・task-37 phase2_fix2）", async () => {
+    // 既存紐付けあり → PUT { linkedCandidateId: null } で解除（disconnect）できること。
+    // UI の「紐付けなし」選択が null として end-to-end で PUT に乗る経路を担保する。
+    const wl = await createWatchlist();
+    const cnd = await makeCandidate();
+    const linked = await itemRoute.PUT(putRequest({ linkedCandidateId: cnd.id }), ctx(wl.id));
+    expect(linked.status).toBe(200);
+
+    const res = await itemRoute.PUT(putRequest({ linkedCandidateId: null }), ctx(wl.id));
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { linkedCandidateId: string | null } };
+    expect(json.data.linkedCandidateId).toBeNull();
+    // 永続化レベルでも解除されていること（候補自体は残る）。
+    const fetched = await prisma.watchlist.findUnique({ where: { id: wl.id } });
+    expect(fetched?.linkedCandidateId).toBeNull();
+    expect(await prisma.candidate.count()).toBe(1);
+  });
 });

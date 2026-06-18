@@ -17,15 +17,18 @@ import { Table, type Column } from "../../components/ui/Table";
 // 依存追加を避けるため react-dom/server の静的描画でアサートする。
 
 describe("ナビゲーション", () => {
-  it("ナビは5項目を Inbox 先頭の順で持つ", () => {
+  it("ナビは6項目を Inbox 先頭の順で持つ（Watchlist は Candidates の次）", () => {
+    // task-37: Watchlist を Candidates と Imports の間に追加（候補の定点観測の隣接導線）。
     expect(NAV_ITEMS.map((i) => i.label)).toEqual([
       "Inbox",
       "Raw Signals",
       "Candidates",
+      "Watchlist",
       "Imports",
       "Settings",
     ]);
     expect(NAV_ITEMS[0]).toEqual({ href: "/inbox", label: "Inbox" });
+    expect(NAV_ITEMS[3]).toEqual({ href: "/watchlist", label: "Watchlist" });
   });
 
   it("NavList は5項目を href 付きで描画し、既定アクティブは Inbox", () => {

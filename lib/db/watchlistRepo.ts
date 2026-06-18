@@ -114,10 +114,11 @@ export async function update(
   if (data.lastCheckedAt !== undefined) updateData.lastCheckedAt = data.lastCheckedAt;
   if (data.note !== undefined) updateData.note = data.note;
   if (data.linkedCandidateId !== undefined) {
-    updateData.linkedCandidate =
-      data.linkedCandidateId === ""
-        ? { disconnect: true }
-        : { connect: { id: data.linkedCandidateId } };
+    // 三値: 非空 id=connect / null（または検証層を通り抜けた空文字）=disconnect。
+    // undefined は上の guard で除外済み（= 触らない）。UI の「紐付けなし」選択は null で届く（task-37）。
+    updateData.linkedCandidate = data.linkedCandidateId
+      ? { connect: { id: data.linkedCandidateId } }
+      : { disconnect: true };
   }
   return db.watchlist.update({ where: { id }, data: updateData });
 }

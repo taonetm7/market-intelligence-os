@@ -172,11 +172,14 @@ export const watchlistInputSchema = z.object({
   currentValue: z.string().optional(),
   deltaFlag: deltaFlagSchema.default("unknown"),
   lastCheckedAt: z.coerce.date().optional(),
-  // 紐付け先 Candidate の id。空文字 "" は不正入力として弾く（.min(1)）。
-  // "" を許すと repository が FK にそのまま渡し、存在しない candidate 参照として Prisma の FK 違反
-  // （非 Zod エラー）→ route が 500 に倒してしまう。検証層で 400 に寄せ、POST/PUT を一貫させる。
-  // 紐付け無しは「フィールド省略（undefined）」で表す。
-  linkedCandidateId: z.string().min(1).optional(),
+  // 紐付け先 Candidate の id。三値で表す:
+  // - 非空文字列 = その候補に紐付け（connect）
+  // - null       = 紐付け解除 / 未紐付け（repository が disconnect、create は no-link）
+  // - 省略(undefined) = 変更しない（PUT の部分更新で「触らない」を表す）
+  // 空文字 "" は不正入力として弾く（.min(1)）。"" を許すと repository が FK にそのまま渡し、存在しない
+  // candidate 参照として Prisma の FK 違反（非 Zod エラー）→ route が 500 に倒してしまう。検証層で 400 に
+  // 寄せる。解除は明示 null で行う（UI の「紐付けなし」選択を PUT に end-to-end で通すため。task-37）。
+  linkedCandidateId: z.string().min(1).nullable().optional(),
   note: z.string().optional(),
 });
 export type WatchlistInput = z.infer<typeof watchlistInputSchema>;

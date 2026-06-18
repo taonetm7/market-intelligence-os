@@ -27,7 +27,8 @@ const NOT_FOUND_BODY = { error: { message: "Watchlist が見つかりません" 
 /**
  * linkedCandidateId が **非空文字列で指定** されていれば紐付け先 Candidate の存在を先に確認する
  * （route.ts の POST と同様式）。不在なら「紐付け先の Candidate が見つかりません」404 を返す
- * （Watchlist 自体の不在 404 と区別する）。未指定（null/undefined）は確認不要で null を返す。
+ * （Watchlist 自体の不在 404 と区別する）。null（= 紐付け解除）/ undefined（= 変更しない）は確認不要で
+ * null を返し、後段の update に委ねる（null は repository が disconnect する。task-37）。
  * 空文字 "" は watchlistInputSchema 由来の .min(1) が 400 で弾くため、ここでは素通しして後段の parse に委ねる。
  */
 async function linkedCandidateNotFound(linkedCandidateId: unknown): Promise<Response | null> {

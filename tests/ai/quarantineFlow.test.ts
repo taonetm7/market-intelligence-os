@@ -8,8 +8,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { submitAiRawSignalsToQuarantine } from "../../lib/ai/quarantineIntake";
 import { tagSuggest } from "../../lib/ai/suggest";
+import { buildMissingEvidenceQuarantineDrafts } from "../../components/candidate/CandidateDetail";
+import {
+  buildQuarantineDraftsFromFields,
+  emptyQuickCaptureFields,
+} from "../../components/raw-signal/QuickCapture";
 import { quarantineRepo } from "../../lib/import/quarantineRepo";
-import { originSchema } from "../../lib/validation/enums";
+import { originSchema, sourceTypeSchema } from "../../lib/validation/enums";
 
 // task-39 Phase 2 acceptance（spec v2 §11.2 / Codex 指摘①）:
 // 「AI 由来データが origin=ai で quarantine 経由になる」実経路をエンドツーエンドで検証する。
@@ -93,5 +98,55 @@ describe("AI 提案 → quarantine(origin=ai) → 人間 accept の実経路", (
     const accepted = await quarantineRepo.accept(intake.batch.id, undefined, db);
     expect(accepted.accepted).toHaveLength(0);
     expect(await db.rawSignal.count()).toBe(0);
+  });
+});
+
+// 実画面（task-17 QuickCapture / task-21 CandidateDetail）に配線した payload builder の出力が、
+// そのまま quarantine(origin=ai)→accept を通って origin=ai の RawSignal になることを担保する
+// （配線の到達性。ボタンは proposed 取得後に submitProposalToQuarantine 経由で本経路を呼ぶ）。
+describe("実画面の payload builder → quarantine(origin=ai) 到達性", () => {
+  it("QuickCapture: 捉えた観測の下書きが origin=ai で本登録に至る", async () => {
+    const fields = {
+      ...emptyQuickCaptureFields(),
+      sourceType: sourceTypeSchema.enum.review,
+      rawText: "競合が値上げしたという観測",
+      observedEntity: "競合アプリ",
+    };
+    const drafts = buildQuarantineDraftsFromFields(fields);
+    expect(drafts).not.toBeNull();
+
+    const intake = await submitAiRawSignalsToQuarantine(drafts!, db);
+    expect(intake.batch.origin).toBe(originSchema.enum.ai);
+    const accepted = await quarantineRepo.accept(intake.batch.id, undefined, db);
+    expect(accepted.accepted).toHaveLength(1);
+    expect(accepted.accepted[0].rawSignal.origin).toBe(originSchema.enum.ai);
+  });
+
+  it("QuickCapture: 必須未充足（rawText 空）なら null（導線実行不可）", () => {
+    const fields = { ...emptyQuickCaptureFields(), sourceType: sourceTypeSchema.enum.review };
+    expect(buildQuarantineDraftsFromFields(fields)).toBeNull();
+  });
+
+  it("CandidateDetail: 不足Evidence提案が origin=ai の RawSignal 下書きに変換され本登録に至る", async () => {
+    const drafts = buildMissingEvidenceQuarantineDrafts("請求書 SaaS", [
+      { evidenceType: "community", hint: "Reddit を調べる" }, // sourceType としても妥当
+      { evidenceType: "spend", hint: "課金データを探す" }, // sourceType に無い → community 既定
+    ]);
+    expect(drafts).not.toBeNull();
+    expect(drafts).toHaveLength(2);
+    expect(drafts![0].sourceType).toBe(sourceTypeSchema.enum.community);
+    expect(drafts![1].sourceType).toBe(sourceTypeSchema.enum.community);
+
+    const intake = await submitAiRawSignalsToQuarantine(drafts!, db);
+    expect(intake.batch.origin).toBe(originSchema.enum.ai);
+    const accepted = await quarantineRepo.accept(intake.batch.id, undefined, db);
+    expect(accepted.accepted).toHaveLength(2);
+    for (const { rawSignal } of accepted.accepted) {
+      expect(rawSignal.origin).toBe(originSchema.enum.ai);
+    }
+  });
+
+  it("CandidateDetail: 提案が空なら null（導線実行不可）", () => {
+    expect(buildMissingEvidenceQuarantineDrafts("X", [])).toBeNull();
   });
 });

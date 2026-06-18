@@ -76,6 +76,18 @@ export function buildRawSignalInput(fields: QuickCaptureFields): Record<string, 
 }
 
 /**
+ * task-39 Phase 2: AI 下書きを使って捉えた一次観測を、**直接保存せず** origin=ai で quarantine へ
+ * 送るための RawSignal 下書き配列を作る（§11.2 draft→人間 accept）。必須（sourceType / rawText）が
+ * 未充足なら null（導線を実行不可にする）。来歴 origin は投入側（quarantine intake）が "ai" に固定する。
+ */
+export function buildQuarantineDraftsFromFields(
+  fields: QuickCaptureFields,
+): Record<string, unknown>[] | null {
+  if (!fields.rawText.trim() || !fields.sourceType) return null;
+  return [buildRawSignalInput(fields)];
+}
+
+/**
  * task-02 の Zod スキーマで検証する。成功なら repository に渡せる入力を、
  * 失敗なら必須項目（sourceType / rawText）のインラインエラーを返す。
  */
@@ -327,6 +339,8 @@ export function QuickCapture({ onSaved }: QuickCaptureProps) {
             </dl>
           );
         }}
+        // AI 下書きを使ったこの観測を origin=ai で quarantine へ送る（人間 accept で初めて本登録）。
+        buildQuarantineDrafts={() => buildQuarantineDraftsFromFields(fields)}
       />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>

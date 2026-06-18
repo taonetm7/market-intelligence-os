@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { SOURCE_TYPE_VALUES, sourceTypeSchema } from "../../lib/validation/enums";
 import { AiDraftPanel } from "../ai/AiDraftPanel";
 import { PageHeader } from "../layout/PageHeader";
 import { Badge, Button } from "../ui";
@@ -184,6 +185,28 @@ const EV_ITEM_STYLE = {
   borderBottom: "1px solid #eaecf0",
   fontSize: 13,
 } as const;
+
+/**
+ * task-39 Phase 2: AI の「不足 Evidence 提案」を、調査用の RawSignal 下書きへ変換する。
+ * AI が生成したテキストは直接 DB へ書かず、origin=ai で quarantine へ送り人間 accept を必ず通す
+ * （§11.2）。来歴 origin は投入側（quarantine intake）が "ai" に固定する。
+ * sourceType は evidenceType がそのまま sourceType としても妥当ならそれを使い、無ければ
+ * community を既定にする（いずれも enum 経由・直書きしない）。提案が空なら null。
+ */
+export function buildMissingEvidenceQuarantineDrafts(
+  candidateTitle: string,
+  suggestions: Array<{ evidenceType: string; hint: string }>,
+): Record<string, unknown>[] | null {
+  if (suggestions.length === 0) return null;
+  const sourceTypeValues = SOURCE_TYPE_VALUES as readonly string[];
+  return suggestions.map((s) => ({
+    sourceType: sourceTypeValues.includes(s.evidenceType)
+      ? s.evidenceType
+      : sourceTypeSchema.enum.community,
+    rawText: `[AI不足Evidence提案] ${s.evidenceType}: ${s.hint}`,
+    observedEntity: candidateTitle,
+  }));
+}
 
 export type EvidenceListProps = {
   evidences: EvidenceRow[];
@@ -447,7 +470,18 @@ export function CandidateDetail({ candidateId, reloadSignal = 0 }: CandidateDeta
                   </ul>
                 );
               }}
+              // AI 提案（不足 Evidence ヒント）を調査用 RawSignal 下書きにして origin=ai で
+              // quarantine へ送る。人間 accept で初めて本登録される（直接書き込みはしない・§11.2）。
+              buildQuarantineDrafts={(proposed) => {
+                if (!candidate) return null;
+                const p = proposed as {
+                  suggestions?: Array<{ evidenceType: string; hint: string }>;
+                };
+                return buildMissingEvidenceQuarantineDrafts(candidate.title, p.suggestions ?? []);
+              }}
             />
+            {/* 調査プロンプトは Markdown 文字列であり RawSignal/Evidence の実データではないため、
+                quarantine 投入導線は付けない（§11.2 の隔離対象は実体反映データのみ）。 */}
             <AiDraftPanel
               action="research-prompt"
               label="AI下書き（調査プロンプト）"

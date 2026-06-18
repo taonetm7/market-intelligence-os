@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AiDraftPanel } from "../ai/AiDraftPanel";
 import { PageHeader } from "../layout/PageHeader";
 import { Badge, Button } from "../ui";
 import { LinkDialog } from "../evidence/LinkDialog";
@@ -409,6 +410,66 @@ export function CandidateDetail({ candidateId, reloadSignal = 0 }: CandidateDeta
               initialValues={candidate.initialInputs ?? undefined}
               onScored={handleScored}
               reloadSignal={scoringReload}
+            />
+          </div>
+
+          {/* task-39: AI 支援（下書き提案）。不足 Evidence の調査ヒントと Deep Research プロンプトを
+              「提案」として表示するだけで、score/strength/stage は提案せず DB へも自動反映しない
+              （人間が確認して手動で反映＝§11.2 draft→accept）。 */}
+          <div style={PANEL_STYLE}>
+            <h2 style={{ fontSize: 16, margin: "0 0 8px" }}>AI 支援（下書き）</h2>
+            <AiDraftPanel
+              action="missing-evidence"
+              label="AIで不足Evidenceを提案"
+              buildBody={() =>
+                candidate
+                  ? {
+                      presentEvidenceTypes: evidences.map((e) => e.evidenceType),
+                      title: candidate.title,
+                      painStatement: candidate.painStatement ?? undefined,
+                    }
+                  : null
+              }
+              renderProposed={(proposed) => {
+                const p = proposed as {
+                  suggestions?: Array<{ evidenceType: string; hint: string }>;
+                };
+                const suggestions = p.suggestions ?? [];
+                return suggestions.length === 0 ? (
+                  <span>不足 Evidence の提案はありません。</span>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {suggestions.map((s, i) => (
+                      <li key={`${s.evidenceType}-${i}`}>
+                        <strong>{s.evidenceType}</strong>: {s.hint}
+                      </li>
+                    ))}
+                  </ul>
+                );
+              }}
+            />
+            <AiDraftPanel
+              action="research-prompt"
+              label="AI下書き（調査プロンプト）"
+              buildBody={() =>
+                candidate
+                  ? {
+                      title: candidate.title,
+                      targetUser: candidate.targetUser ?? undefined,
+                      painStatement: candidate.painStatement ?? undefined,
+                      currentSubstitute: candidate.currentSubstitute ?? undefined,
+                      presentEvidenceTypes: evidences.map((e) => e.evidenceType),
+                    }
+                  : null
+              }
+              renderProposed={(proposed) => {
+                const p = proposed as { prompt?: string };
+                return (
+                  <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit" }}>
+                    {p.prompt || "—"}
+                  </pre>
+                );
+              }}
             />
           </div>
         </>

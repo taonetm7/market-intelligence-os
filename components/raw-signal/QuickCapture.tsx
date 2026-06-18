@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { AiDraftPanel } from "../ai/AiDraftPanel";
 import { Button, Input, Select, type SelectOption } from "../ui";
 import { SOURCE_TYPE_VALUES } from "../../lib/validation/enums";
 import { rawSignalInputSchema, type RawSignalInput } from "../../lib/validation/schemas";
@@ -287,6 +288,46 @@ export function QuickCapture({ onSaved }: QuickCaptureProps) {
           </label>
         </div>
       ) : null}
+
+      {/* task-39: AI 下書き（正規化フィールドの提案）。rawText を元に候補フィールド案を提示するだけで
+          自動反映はしない（人間が確認して手動入力・§11.2 draft→accept）。スコア/stage は提案しない。 */}
+      <AiDraftPanel
+        action="normalize-draft"
+        label="AI下書き（正規化フィールド）"
+        buildBody={() => {
+          const rawText = fields.rawText.trim();
+          if (!rawText) return null;
+          return {
+            rawText,
+            sourceType: fields.sourceType || undefined,
+            observedEntity: fields.observedEntity.trim() || undefined,
+          };
+        }}
+        renderProposed={(proposed) => {
+          const p = proposed as {
+            title?: string;
+            targetUser?: string;
+            painStatement?: string;
+            currentSubstitute?: string;
+          };
+          return (
+            <dl style={{ margin: 0, display: "grid", gap: 4 }}>
+              <div>
+                <strong>タイトル</strong>: {p.title || "—"}
+              </div>
+              <div>
+                <strong>対象ユーザー</strong>: {p.targetUser || "—"}
+              </div>
+              <div>
+                <strong>課題</strong>: {p.painStatement || "—"}
+              </div>
+              <div>
+                <strong>現代替手段</strong>: {p.currentSubstitute || "—"}
+              </div>
+            </dl>
+          );
+        }}
+      />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
         <Button type="submit" variant="primary" disabled={submitting}>

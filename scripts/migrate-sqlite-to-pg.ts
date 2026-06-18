@@ -29,9 +29,14 @@ import { pathToFileURL } from "node:url";
 
 import { PrismaClient } from "@prisma/client";
 
-import { ensureSearchIndex } from "../lib/db/search";
-import { countRows, exportAll, EXPORTED_MODEL_NAMES, type ExportBundle } from "./export-all";
-import { importAll } from "./import-all";
+// このスクリプトは `node --experimental-transform-types` で直接実行する（docs の手順）。Node の型ストリップは
+// **実行時に解決される相対 import に拡張子を要求する**（型のみ import は消去されるので不要）。export-all /
+// import-all は実行時の相対 import を持たない（@prisma/client と型のみ）ため、明示拡張子付きで読めば解決できる。
+// 一方 lib/db/search は実行時に `./client` 等を拡張子なしで辿るため node 単体では解決できない。そこで全文検索
+// 索引の用意は search.ts を import せず、Postgres 経路の DDL（pg_trgm）だけを下の ensurePgSearchIndex に内製する
+// （search.ts の公開 IF は不変。DDL は search.ts / docs §5 / migration と同じ＝既存の「索引の二重定義」方針に倣う）。
+import { countRows, exportAll, EXPORTED_MODEL_NAMES, type ExportBundle } from "./export-all.ts";
+import { importAll } from "./import-all.ts";
 
 /** 内容一致検証で突合する全テーブル（バンドルのキー＝全モデル網羅）。 */
 const BUNDLE_TABLES = [
@@ -52,6 +57,31 @@ if (BUNDLE_TABLES.length !== EXPORTED_MODEL_NAMES.length) {
   throw new Error(
     "BUNDLE_TABLES と EXPORTED_MODEL_NAMES の数が一致しません（全モデル網羅の前提が崩れています）。",
   );
+}
+
+// Postgres 全文検索（pg_trgm）の GIN 索引名。lib/db/search.ts の RAW_SIGNAL_TRGM_* と一致させること
+// （search.ts を実行時 import できない事情から内製した複製。索引の二重定義は既存方針＝search.ts のコメント参照）。
+const RAW_SIGNAL_TRGM_RAWTEXT_INDEX = "RawSignal_rawText_trgm_idx";
+const RAW_SIGNAL_TRGM_ENTITY_INDEX = "RawSignal_observedEntity_trgm_idx";
+
+/** pg_trgm 拡張＋GIN trigram 索引（冪等）。search.ts の PG_ENSURE_STATEMENTS と同一 DDL。 */
+const PG_ENSURE_STATEMENTS: string[] = [
+  `CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+  `CREATE INDEX IF NOT EXISTS "${RAW_SIGNAL_TRGM_RAWTEXT_INDEX}" ` +
+    `ON "RawSignal" USING gin ("rawText" gin_trgm_ops)`,
+  `CREATE INDEX IF NOT EXISTS "${RAW_SIGNAL_TRGM_ENTITY_INDEX}" ` +
+    `ON "RawSignal" USING gin ("observedEntity" gin_trgm_ops)`,
+];
+
+/**
+ * Postgres 全文検索（pg_trgm）の索引を冪等に用意する（lib/db/search.ts の ensureSearchIndex の Postgres
+ * 経路と同一。索引は既存行も含めて張られ以後の更新へ自動追随する＝SQLite のような同期トリガ/backfill は不要）。
+ * search.ts を実行時 import できないため DDL のみ複製する（公開 IF は search.ts 側が唯一の正）。
+ */
+async function ensurePgSearchIndex(db: PrismaClient): Promise<void> {
+  for (const stmt of PG_ENSURE_STATEMENTS) {
+    await db.$executeRawUnsafe(stmt);
+  }
 }
 
 /** 1 件の差分（件数差・取りこぼし・余剰・内容不一致）。 */
@@ -149,8 +179,8 @@ export async function migrateBundleToPostgres(
   const result = await importAll(bundle, db);
   const restoredTotal = Object.values(result.restored).reduce((sum, n) => sum + n, 0);
 
-  // Postgres 全文検索（pg_trgm）の索引を用意する（lib/db/search.ts の Postgres 経路）。
-  await ensureSearchIndex(db);
+  // Postgres 全文検索（pg_trgm）の索引を用意する（lib/db/search.ts の Postgres 経路と同一 DDL）。
+  await ensurePgSearchIndex(db);
 
   // 取り込み後の Postgres を読み直し、入力バンドルと**内容レベル**で一致するか検証する。
   // 総件数だけでなく、全テーブルの各レコード（主キー＋全フィールド）を突合する（指摘②）。

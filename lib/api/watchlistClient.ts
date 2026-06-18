@@ -74,9 +74,16 @@ export function formValuesFromItem(item: WatchlistItem): WatchlistFormValues {
   };
 }
 
-/** フォーム送信ボディを組み立てる。空文字の任意フィールドは省略する（特に linkedCandidateId）。 */
-export function toWriteBody(values: WatchlistFormValues): Record<string, string> {
-  const body: Record<string, string> = {
+/**
+ * フォーム送信ボディを組み立てる。空文字の任意フィールド（metricName/locale/note）は省略する。
+ * linkedCandidateId だけは三値の意味があるため特別扱いする:
+ * - 非空 = その id を送る（connect）
+ * - 空（「紐付けなし」選択）= 明示 null を送る（解除 disconnect / 未紐付け）
+ * 空文字 "" は送らない（task-36 の .min(1) が 400 で弾くため）。これにより編集での紐付け解除が
+ * PUT に end-to-end で乗る（省略すると「変更しない」と解釈され既存紐付けが残るバグだった。task-37）。
+ */
+export function toWriteBody(values: WatchlistFormValues): Record<string, string | null> {
+  const body: Record<string, string | null> = {
     entityType: values.entityType,
     entityName: values.entityName.trim(),
   };
@@ -84,9 +91,8 @@ export function toWriteBody(values: WatchlistFormValues): Record<string, string>
   if (metricName !== "") body.metricName = metricName;
   const locale = values.locale.trim();
   if (locale !== "") body.locale = locale;
-  // 空文字は task-36 の .min(1) が 400 で弾く。紐付けなしは「省略」で表す。
   const linkedCandidateId = values.linkedCandidateId.trim();
-  if (linkedCandidateId !== "") body.linkedCandidateId = linkedCandidateId;
+  body.linkedCandidateId = linkedCandidateId !== "" ? linkedCandidateId : null;
   const note = values.note.trim();
   if (note !== "") body.note = note;
   return body;

@@ -87,17 +87,18 @@ describe("watchlistClient: URL とボディ整形", () => {
     );
   });
 
-  it("toWriteBody は必須を残し、空の任意フィールド（特に空文字 linkedCandidateId）を省く", () => {
+  it("toWriteBody は必須を残し、空の metricName/locale/note を省く。空 linkedCandidateId は明示 null（解除）", () => {
     const body = toWriteBody({
       entityType: "ranking",
       entityName: "  総合1位  ",
       metricName: "",
       locale: "",
-      linkedCandidateId: "", // 空文字は API の .min(1) が 400 にするため積まない
+      linkedCandidateId: "", // 「紐付けなし」= 解除を意図 → 省略でなく明示 null を送る（PUT で disconnect）
       note: "",
     });
-    expect(body).toEqual({ entityType: "ranking", entityName: "総合1位" });
-    expect("linkedCandidateId" in body).toBe(false);
+    // metricName/locale/note は省略、linkedCandidateId だけは null を積む（三値の解除を表す）。
+    expect(body).toEqual({ entityType: "ranking", entityName: "総合1位", linkedCandidateId: null });
+    expect(body.linkedCandidateId).toBeNull();
   });
 
   it("toWriteBody は非空の linkedCandidateId / 任意フィールドを積む", () => {
@@ -151,13 +152,22 @@ describe("watchlistClient: API 呼び出し", () => {
     expect(calls[0].url).toBe("/api/watchlist?entityType=competitor_app");
   });
 
-  it("createWatchlist は POST で toWriteBody を送る（空 linkedCandidateId を含めない）", async () => {
+  it("createWatchlist は POST で toWriteBody を送る（紐付けなしは null）", async () => {
     const { fetcher, calls } = makeFetcher({ data: makeItem() });
     await createWatchlist({ ...emptyForm(), entityName: "Acme" }, fetcher);
     expect(calls[0].url).toBe("/api/watchlist");
     expect(calls[0].init?.method).toBe("POST");
     const sent = JSON.parse(String(calls[0].init?.body));
-    expect(sent).toEqual({ entityType: "competitor_app", entityName: "Acme" });
+    expect(sent).toEqual({ entityType: "competitor_app", entityName: "Acme", linkedCandidateId: null });
+  });
+
+  it("updateWatchlist は『紐付けなし』選択で linkedCandidateId:null を PUT に乗せる（解除導線）", async () => {
+    const { fetcher, calls } = makeFetcher({ data: makeItem({ linkedCandidateId: null }) });
+    // 既存紐付けあり → フォームで空（紐付けなし）に変更して保存。
+    await updateWatchlist("wl-1", { ...emptyForm(), entityName: "Acme", linkedCandidateId: "" }, fetcher);
+    const sent = JSON.parse(String(calls[0].init?.body));
+    expect(sent.linkedCandidateId).toBeNull();
+    expect("linkedCandidateId" in sent).toBe(true); // 省略でなく明示 null（= disconnect）
   });
 
   it("updateWatchlist は PUT /api/watchlist/[id] を叩く", async () => {

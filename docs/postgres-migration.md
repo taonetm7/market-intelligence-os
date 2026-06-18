@@ -74,8 +74,12 @@ pnpm exec prisma db push  --schema prisma/schema.postgres.prisma
 
 ## 4. データを取り込む（移行する場合）
 
-step 2 のバンドルを Postgres へ取り込みます。取り込み後に **全文検索索引（pg_trgm）を作成**し、
-**往復一致（総件数）を検証**します:
+step 2 のバンドルを Postgres へ取り込みます。export バンドルは **全 Prisma モデルを網羅** します
+（コア5＋運用2＋後続追加の DuplicateDismissal=task-35 / Watchlist=task-36。網羅は
+`EXPORTED_MODEL_NAMES` を実スキーマ DMMF と突合するテストで担保＝モデル追加時の漏れを CI で検出）。
+取り込み後に **全文検索索引（pg_trgm）を作成**し、**内容レベルで往復一致を検証**します
+（総件数だけでなく全テーブルの各レコードの主キー＋全フィールドを突合し、件数が合っても内容が
+ズレる移行バグを検出。差分があれば一覧表示し非ゼロ終了）:
 
 ```bash
 DATABASE_PROVIDER=postgres DATABASE_URL="postgresql://mi:mi@localhost:5432/market_intel?schema=public" \
@@ -87,8 +91,9 @@ DATABASE_PROVIDER=postgres DATABASE_URL="postgresql://mi:mi@localhost:5432/marke
 ```
 
 - 内部では既存機構をそのまま流用します:
-  `import-all`（原子的・auto-snapshot 付きの復元）→ `ensureSearchIndex`（pg_trgm 索引）→
-  `export-all` で再読込し総件数を突合（`往復一致: OK`）。
+  `import-all`（原子的・auto-snapshot 付きの復元・全モデル網羅）→ `ensureSearchIndex`（pg_trgm 索引）→
+  `export-all` で再読込し `diffBundles` で**内容レベル**に突合（`往復一致（内容レベル）: OK`）。
+  差分（件数差 / 取りこぼし / 余剰 / 内容不一致）があれば一覧表示します。
 - 取り込み先が Postgres でない場合（`DATABASE_PROVIDER` / `DATABASE_URL` 不整合）は、SQLite を
   誤って上書きしないよう**中断**します。
 

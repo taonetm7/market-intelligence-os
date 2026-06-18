@@ -1,8 +1,14 @@
 // 全件 JSON export — task-25, spec v2 §18.4。
 //
-// コア5テーブル＋運用テーブル（ImportBatch / QuarantineRow）を 1 つの JSON バンドルへ
-// 書き出す。`pnpm export-all [出力パス]` で実行し、出力先は既定で
+// コア5テーブル＋運用テーブル（ImportBatch / QuarantineRow）＋後続追加モデル
+// （DuplicateDismissal=task-35 / Watchlist=task-36）を 1 つの JSON バンドルへ書き出す。
+// `pnpm export-all [出力パス]` で実行し、出力先は既定で
 // `exports/export-<ISO8601>.json`（§18.4: git 管理する export ディレクトリ）。
+//
+// 網羅性の担保（task-40 Phase 2）: バンドルが Prisma の全モデルを確実に含むよう、
+// EXPORTED_MODEL_NAMES に全モデル名を明示列挙し、DMMF（実スキーマ）との突合テスト
+// （tests/db/migration-coverage.test.ts）で「モデル追加時の export 漏れ」を検出する。
+// SQLite→Postgres 移行（scripts/migrate-sqlite-to-pg.ts）はこの全件バンドルに依存する。
 //
 // 設計方針:
 // - 依存を増やさない。@prisma/client だけを使い、独自の loader フックは要らない
@@ -33,10 +39,29 @@ export interface ExportBundle {
   quarantineRows: unknown[];
   scoreSnapshots: unknown[];
   decisionLogs: unknown[];
+  duplicateDismissals: unknown[];
+  watchlists: unknown[];
 }
 
 /** export フォーマットの版（import-all の互換チェックと揃える）。 */
 export const EXPORT_FORMAT_VERSION = 1 as const;
+
+/**
+ * export / import が網羅する Prisma モデル名（全件移行の単一の正＝source of truth）。
+ * 実スキーマ（DMMF）との突合テストでここに無いモデルを検出し、移行漏れを防ぐ
+ * （tests/db/migration-coverage.test.ts）。モデルを追加したら必ずここと exportAll に反映する。
+ */
+export const EXPORTED_MODEL_NAMES = [
+  "RawSignal",
+  "Candidate",
+  "Evidence",
+  "ImportBatch",
+  "QuarantineRow",
+  "ScoreSnapshot",
+  "DecisionLog",
+  "DuplicateDismissal",
+  "Watchlist",
+] as const;
 
 /**
  * 全テーブルを読み出してバンドルを返す（DB は変更しない）。
@@ -56,6 +81,8 @@ export async function exportAll(
     quarantineRows,
     scoreSnapshots,
     decisionLogs,
+    duplicateDismissals,
+    watchlists,
   ] = await Promise.all([
     db.rawSignal.findMany({ orderBy: { id: "asc" } }),
     db.candidate.findMany({ orderBy: { id: "asc" } }),
@@ -64,6 +91,8 @@ export async function exportAll(
     db.quarantineRow.findMany({ orderBy: { id: "asc" } }),
     db.scoreSnapshot.findMany({ orderBy: { id: "asc" } }),
     db.decisionLog.findMany({ orderBy: { id: "asc" } }),
+    db.duplicateDismissal.findMany({ orderBy: { id: "asc" } }),
+    db.watchlist.findMany({ orderBy: { id: "asc" } }),
   ]);
 
   return {
@@ -76,6 +105,8 @@ export async function exportAll(
     quarantineRows,
     scoreSnapshots,
     decisionLogs,
+    duplicateDismissals,
+    watchlists,
   };
 }
 
@@ -88,7 +119,9 @@ export function countRows(bundle: ExportBundle): number {
     bundle.importBatches.length +
     bundle.quarantineRows.length +
     bundle.scoreSnapshots.length +
-    bundle.decisionLogs.length
+    bundle.decisionLogs.length +
+    bundle.duplicateDismissals.length +
+    bundle.watchlists.length
   );
 }
 

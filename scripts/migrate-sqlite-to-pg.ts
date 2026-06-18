@@ -17,9 +17,11 @@
 //               scripts/migrate-sqlite-to-pg.ts exports/migrate.json
 //
 // 本スクリプト（= 上記 step 2 の取り込み）は Postgres 接続済みの生成クライアントで動く前提で:
-//   - importAll でバンドルを Postgres へ復元（既存機構・原子的・auto-snapshot 付き）
+//   - importAll でバンドルを Postgres へ復元（既存機構・原子的・auto-snapshot 付き／全モデル網羅）
 //   - ensureSearchIndex で pg_trgm 全文検索索引を用意（lib/db/search.ts の Postgres 経路）
-//   - exportAll で取り込み後の Postgres を読み直し、入力バンドルと総件数が一致するか検証（往復一致）
+//   - exportAll で取り込み後の Postgres を読み直し、入力バンドルと**内容レベル**で一致するか検証する。
+//     総件数だけでなく全テーブルの各レコード（主キー＋全フィールド）を diffBundles で突合し、
+//     件数が合っても内容がズレる移行バグを検出する（往復一致）。
 // を行う。全手順は docs/postgres-migration.md。
 
 import { readFileSync } from "node:fs";
@@ -28,8 +30,85 @@ import { pathToFileURL } from "node:url";
 import { PrismaClient } from "@prisma/client";
 
 import { ensureSearchIndex } from "../lib/db/search";
-import { countRows, exportAll, type ExportBundle } from "./export-all";
+import { countRows, exportAll, EXPORTED_MODEL_NAMES, type ExportBundle } from "./export-all";
 import { importAll } from "./import-all";
+
+/** 内容一致検証で突合する全テーブル（バンドルのキー＝全モデル網羅）。 */
+const BUNDLE_TABLES = [
+  "rawSignals",
+  "candidates",
+  "evidence",
+  "importBatches",
+  "quarantineRows",
+  "scoreSnapshots",
+  "decisionLogs",
+  "duplicateDismissals",
+  "watchlists",
+] as const;
+
+// バンドルの全テーブルが EXPORTED_MODEL_NAMES（全モデル）と 1:1 で対応していることを
+// import 時に静的保証する（モデル追加で BUNDLE_TABLES 更新を忘れたらここで型/件数が崩れる）。
+if (BUNDLE_TABLES.length !== EXPORTED_MODEL_NAMES.length) {
+  throw new Error(
+    "BUNDLE_TABLES と EXPORTED_MODEL_NAMES の数が一致しません（全モデル網羅の前提が崩れています）。",
+  );
+}
+
+/** 1 件の差分（件数差・取りこぼし・余剰・内容不一致）。 */
+export interface BundleDiff {
+  table: string;
+  kind: "count" | "missing" | "extra" | "field";
+  detail: string;
+}
+
+/** キー順非依存の正規 JSON（行は全カラム scalar なので浅いキーソートで十分）。 */
+function canonicalJson(row: unknown): string {
+  // Date は JSON 化で ISO 文字列になり、入力（JSON 由来の文字列）と一致する。
+  const obj = JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) sorted[key] = obj[key];
+  return JSON.stringify(sorted);
+}
+
+/** テーブル行を id→正規 JSON の Map にする（内容差分検出の基盤）。 */
+function indexById(rows: unknown[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const id = String((row as Record<string, unknown>).id);
+    map.set(id, canonicalJson(row));
+  }
+  return map;
+}
+
+/**
+ * 2 つのバンドルを**内容レベル**で突合する（総件数だけでなく、各レコードの主キーと
+ * 全フィールドの一致を検証する＝指摘②対応）。全テーブルについて、件数・取りこぼし（missing）・
+ * 余剰（extra）・内容不一致（field）を列挙して返す。差分ゼロなら往復一致。
+ */
+export function diffBundles(expected: ExportBundle, actual: ExportBundle): BundleDiff[] {
+  const diffs: BundleDiff[] = [];
+  for (const table of BUNDLE_TABLES) {
+    const a = indexById((expected[table] as unknown[] | undefined) ?? []);
+    const b = indexById((actual[table] as unknown[] | undefined) ?? []);
+    if (a.size !== b.size) {
+      diffs.push({ table, kind: "count", detail: `件数差: 期待 ${a.size} / 実際 ${b.size}` });
+    }
+    for (const [id, json] of a) {
+      const other = b.get(id);
+      if (other === undefined) {
+        diffs.push({ table, kind: "missing", detail: `id=${id} が取り込み先に存在しない` });
+      } else if (other !== json) {
+        diffs.push({ table, kind: "field", detail: `id=${id} の内容が不一致` });
+      }
+    }
+    for (const id of b.keys()) {
+      if (!a.has(id)) {
+        diffs.push({ table, kind: "extra", detail: `id=${id} が取り込み先に余分に存在する` });
+      }
+    }
+  }
+  return diffs;
+}
 
 /** 移行ガード: 取り込み先が Postgres であることを要求する（事故防止）。 */
 function assertPostgresTarget(): void {
@@ -52,7 +131,10 @@ function assertPostgresTarget(): void {
 export interface MigrateResult {
   restoredTotal: number;
   reexportedTotal: number;
+  /** 内容レベルで往復一致したか（diffs が空＝OK）。 */
   roundTripMatch: boolean;
+  /** 検出した差分（件数・取りこぼし・余剰・内容不一致）。空なら完全一致。 */
+  diffs: BundleDiff[];
 }
 
 /**
@@ -70,14 +152,17 @@ export async function migrateBundleToPostgres(
   // Postgres 全文検索（pg_trgm）の索引を用意する（lib/db/search.ts の Postgres 経路）。
   await ensureSearchIndex(db);
 
-  // 取り込み後の Postgres を読み直し、入力バンドルと総件数が一致するか確認する（往復一致）。
+  // 取り込み後の Postgres を読み直し、入力バンドルと**内容レベル**で一致するか検証する。
+  // 総件数だけでなく、全テーブルの各レコード（主キー＋全フィールド）を突合する（指摘②）。
   const reexported = await exportAll(db);
   const reexportedTotal = countRows(reexported);
+  const diffs = diffBundles(bundle, reexported);
 
   return {
     restoredTotal,
     reexportedTotal,
-    roundTripMatch: restoredTotal === reexportedTotal && reexportedTotal === countRows(bundle),
+    roundTripMatch: diffs.length === 0,
+    diffs,
   };
 }
 
@@ -103,9 +188,17 @@ async function main(): Promise<void> {
     const result = await migrateBundleToPostgres(bundle, db);
     console.log(
       `Postgres 取り込み完了: ${result.restoredTotal} 行を復元・全文検索索引を作成。` +
-        ` 往復一致: ${result.roundTripMatch ? "OK" : "NG"}（再 export ${result.reexportedTotal} 行）。`,
+        ` 往復一致（内容レベル）: ${result.roundTripMatch ? "OK" : "NG"}（再 export ${result.reexportedTotal} 行）。`,
     );
-    if (!result.roundTripMatch) process.exitCode = 1;
+    if (!result.roundTripMatch) {
+      // 内容差分を先頭 20 件まで表示（件数差・取りこぼし・余剰・内容不一致）。
+      console.error(`内容差分 ${result.diffs.length} 件を検出:`);
+      for (const d of result.diffs.slice(0, 20)) {
+        console.error(`  - [${d.table}] ${d.kind}: ${d.detail}`);
+      }
+      if (result.diffs.length > 20) console.error(`  …ほか ${result.diffs.length - 20} 件`);
+      process.exitCode = 1;
+    }
   } finally {
     await db.$disconnect();
   }

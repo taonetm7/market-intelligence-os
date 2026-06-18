@@ -41,6 +41,8 @@ export interface ImportResult {
     quarantineRows: number;
     scoreSnapshots: number;
     decisionLogs: number;
+    duplicateDismissals: number;
+    watchlists: number;
   };
   /** auto-snapshot（§18.4）: 取り込み（全削除）前の総件数。 */
   snapshot: { totalRowsBefore: number };
@@ -63,7 +65,19 @@ const DATE_FIELDS: Record<string, readonly string[]> = {
   quarantineRows: ["createdAt"],
   scoreSnapshots: ["snapshotAt"],
   decisionLogs: ["decidedAt"],
+  duplicateDismissals: ["dismissedAt"],
+  watchlists: ["lastCheckedAt", "createdAt", "updatedAt"],
 };
+
+/**
+ * バンドルからテーブル行を取り出す（後方互換）。新モデル（DuplicateDismissal/Watchlist）を
+ * 追加する前に書き出された旧 version=1 バンドルには該当キーが無いため、欠落時は空配列に倒す。
+ * import を「壊さず追加的」に保つための防御的アクセス（§18.4 の既存挙動を維持）。
+ */
+function rowsOf(bundle: ExportBundle, key: keyof typeof DATE_FIELDS): unknown[] {
+  const value = (bundle as unknown as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value : [];
+}
 
 /** 1 行の日付カラム（ISO 文字列 or null）を Date へ復元する（その他はそのまま）。 */
 function reviveDates(row: unknown, dateFields: readonly string[]): Record<string, unknown> {
@@ -80,13 +94,17 @@ function reviveDates(row: unknown, dateFields: readonly string[]): Record<string
 /** バンドルの全テーブル分の行を Date 復元する。 */
 function reviveBundle(bundle: ExportBundle): Record<keyof typeof DATE_FIELDS, Record<string, unknown>[]> {
   return {
-    rawSignals: bundle.rawSignals.map((r) => reviveDates(r, DATE_FIELDS.rawSignals)),
-    candidates: bundle.candidates.map((r) => reviveDates(r, DATE_FIELDS.candidates)),
-    evidence: bundle.evidence.map((r) => reviveDates(r, DATE_FIELDS.evidence)),
-    importBatches: bundle.importBatches.map((r) => reviveDates(r, DATE_FIELDS.importBatches)),
-    quarantineRows: bundle.quarantineRows.map((r) => reviveDates(r, DATE_FIELDS.quarantineRows)),
-    scoreSnapshots: bundle.scoreSnapshots.map((r) => reviveDates(r, DATE_FIELDS.scoreSnapshots)),
-    decisionLogs: bundle.decisionLogs.map((r) => reviveDates(r, DATE_FIELDS.decisionLogs)),
+    rawSignals: rowsOf(bundle, "rawSignals").map((r) => reviveDates(r, DATE_FIELDS.rawSignals)),
+    candidates: rowsOf(bundle, "candidates").map((r) => reviveDates(r, DATE_FIELDS.candidates)),
+    evidence: rowsOf(bundle, "evidence").map((r) => reviveDates(r, DATE_FIELDS.evidence)),
+    importBatches: rowsOf(bundle, "importBatches").map((r) => reviveDates(r, DATE_FIELDS.importBatches)),
+    quarantineRows: rowsOf(bundle, "quarantineRows").map((r) => reviveDates(r, DATE_FIELDS.quarantineRows)),
+    scoreSnapshots: rowsOf(bundle, "scoreSnapshots").map((r) => reviveDates(r, DATE_FIELDS.scoreSnapshots)),
+    decisionLogs: rowsOf(bundle, "decisionLogs").map((r) => reviveDates(r, DATE_FIELDS.decisionLogs)),
+    duplicateDismissals: rowsOf(bundle, "duplicateDismissals").map((r) =>
+      reviveDates(r, DATE_FIELDS.duplicateDismissals),
+    ),
+    watchlists: rowsOf(bundle, "watchlists").map((r) => reviveDates(r, DATE_FIELDS.watchlists)),
   };
 }
 
@@ -101,9 +119,13 @@ async function clearAll(tx: Prisma.TransactionClient): Promise<void> {
   await tx.scoreSnapshot.deleteMany();
   await tx.decisionLog.deleteMany();
   await tx.quarantineRow.deleteMany();
+  // Watchlist は Candidate を参照（onDelete: SetNull）。件数の決定性のため Candidate より先に消す。
+  await tx.watchlist.deleteMany();
   await tx.candidate.deleteMany();
   await tx.rawSignal.deleteMany();
   await tx.importBatch.deleteMany();
+  // DuplicateDismissal は他テーブルへ FK を持たない（候補 ID は素の String）。順序非依存。
+  await tx.duplicateDismissal.deleteMany();
 }
 
 /**
@@ -156,6 +178,18 @@ async function restoreAll(
       data: data.decisionLogs as unknown as Prisma.DecisionLogCreateManyInput[],
     });
   }
+  // Watchlist は Candidate（linkedCandidateId, nullable）に依存するため Candidate の後に入れる。
+  if (data.watchlists.length > 0) {
+    await tx.watchlist.createMany({
+      data: data.watchlists as unknown as Prisma.WatchlistCreateManyInput[],
+    });
+  }
+  // DuplicateDismissal は他に依存しない。
+  if (data.duplicateDismissals.length > 0) {
+    await tx.duplicateDismissal.createMany({
+      data: data.duplicateDismissals as unknown as Prisma.DuplicateDismissalCreateManyInput[],
+    });
+  }
 }
 
 /**
@@ -194,6 +228,8 @@ export async function importAll(
       quarantineRows: data.quarantineRows.length,
       scoreSnapshots: data.scoreSnapshots.length,
       decisionLogs: data.decisionLogs.length,
+      duplicateDismissals: data.duplicateDismissals.length,
+      watchlists: data.watchlists.length,
     },
     snapshot: { totalRowsBefore },
   };
@@ -209,6 +245,8 @@ async function totalRowCount(db: PrismaClient): Promise<number> {
     db.quarantineRow.count(),
     db.scoreSnapshot.count(),
     db.decisionLog.count(),
+    db.duplicateDismissal.count(),
+    db.watchlist.count(),
   ]);
   return counts.reduce((sum, n) => sum + n, 0);
 }

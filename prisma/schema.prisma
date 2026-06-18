@@ -75,6 +75,7 @@ model Candidate {
   nextAction         String?
   rejectedReason     String?
   rejectedReasonCode String?
+  rejectedAt         DateTime? // 棄却時刻（§15.1 傾向分析の期間絞り用）。reject() で記録。未棄却/移行前は null。
   origin             String   @default("manual")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

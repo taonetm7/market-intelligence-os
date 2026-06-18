@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { SOURCE_TYPE_VALUES, sourceTypeSchema } from "../../lib/validation/enums";
+import { AiDraftPanel } from "../ai/AiDraftPanel";
 import { PageHeader } from "../layout/PageHeader";
 import { Badge, Button } from "../ui";
 import { LinkDialog } from "../evidence/LinkDialog";
@@ -183,6 +185,28 @@ const EV_ITEM_STYLE = {
   borderBottom: "1px solid #eaecf0",
   fontSize: 13,
 } as const;
+
+/**
+ * task-39 Phase 2: AI の「不足 Evidence 提案」を、調査用の RawSignal 下書きへ変換する。
+ * AI が生成したテキストは直接 DB へ書かず、origin=ai で quarantine へ送り人間 accept を必ず通す
+ * （§11.2）。来歴 origin は投入側（quarantine intake）が "ai" に固定する。
+ * sourceType は evidenceType がそのまま sourceType としても妥当ならそれを使い、無ければ
+ * community を既定にする（いずれも enum 経由・直書きしない）。提案が空なら null。
+ */
+export function buildMissingEvidenceQuarantineDrafts(
+  candidateTitle: string,
+  suggestions: Array<{ evidenceType: string; hint: string }>,
+): Record<string, unknown>[] | null {
+  if (suggestions.length === 0) return null;
+  const sourceTypeValues = SOURCE_TYPE_VALUES as readonly string[];
+  return suggestions.map((s) => ({
+    sourceType: sourceTypeValues.includes(s.evidenceType)
+      ? s.evidenceType
+      : sourceTypeSchema.enum.community,
+    rawText: `[AI不足Evidence提案] ${s.evidenceType}: ${s.hint}`,
+    observedEntity: candidateTitle,
+  }));
+}
 
 export type EvidenceListProps = {
   evidences: EvidenceRow[];
@@ -409,6 +433,77 @@ export function CandidateDetail({ candidateId, reloadSignal = 0 }: CandidateDeta
               initialValues={candidate.initialInputs ?? undefined}
               onScored={handleScored}
               reloadSignal={scoringReload}
+            />
+          </div>
+
+          {/* task-39: AI 支援（下書き提案）。不足 Evidence の調査ヒントと Deep Research プロンプトを
+              「提案」として表示するだけで、score/strength/stage は提案せず DB へも自動反映しない
+              （人間が確認して手動で反映＝§11.2 draft→accept）。 */}
+          <div style={PANEL_STYLE}>
+            <h2 style={{ fontSize: 16, margin: "0 0 8px" }}>AI 支援（下書き）</h2>
+            <AiDraftPanel
+              action="missing-evidence"
+              label="AIで不足Evidenceを提案"
+              buildBody={() =>
+                candidate
+                  ? {
+                      presentEvidenceTypes: evidences.map((e) => e.evidenceType),
+                      title: candidate.title,
+                      painStatement: candidate.painStatement ?? undefined,
+                    }
+                  : null
+              }
+              renderProposed={(proposed) => {
+                const p = proposed as {
+                  suggestions?: Array<{ evidenceType: string; hint: string }>;
+                };
+                const suggestions = p.suggestions ?? [];
+                return suggestions.length === 0 ? (
+                  <span>不足 Evidence の提案はありません。</span>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {suggestions.map((s, i) => (
+                      <li key={`${s.evidenceType}-${i}`}>
+                        <strong>{s.evidenceType}</strong>: {s.hint}
+                      </li>
+                    ))}
+                  </ul>
+                );
+              }}
+              // AI 提案（不足 Evidence ヒント）を調査用 RawSignal 下書きにして origin=ai で
+              // quarantine へ送る。人間 accept で初めて本登録される（直接書き込みはしない・§11.2）。
+              buildQuarantineDrafts={(proposed) => {
+                if (!candidate) return null;
+                const p = proposed as {
+                  suggestions?: Array<{ evidenceType: string; hint: string }>;
+                };
+                return buildMissingEvidenceQuarantineDrafts(candidate.title, p.suggestions ?? []);
+              }}
+            />
+            {/* 調査プロンプトは Markdown 文字列であり RawSignal/Evidence の実データではないため、
+                quarantine 投入導線は付けない（§11.2 の隔離対象は実体反映データのみ）。 */}
+            <AiDraftPanel
+              action="research-prompt"
+              label="AI下書き（調査プロンプト）"
+              buildBody={() =>
+                candidate
+                  ? {
+                      title: candidate.title,
+                      targetUser: candidate.targetUser ?? undefined,
+                      painStatement: candidate.painStatement ?? undefined,
+                      currentSubstitute: candidate.currentSubstitute ?? undefined,
+                      presentEvidenceTypes: evidences.map((e) => e.evidenceType),
+                    }
+                  : null
+              }
+              renderProposed={(proposed) => {
+                const p = proposed as { prompt?: string };
+                return (
+                  <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit" }}>
+                    {p.prompt || "—"}
+                  </pre>
+                );
+              }}
             />
           </div>
         </>

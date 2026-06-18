@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { AiDraftPanel } from "../ai/AiDraftPanel";
 import { Button, Input, Select, type SelectOption } from "../ui";
 import { SOURCE_TYPE_VALUES } from "../../lib/validation/enums";
 import { rawSignalInputSchema, type RawSignalInput } from "../../lib/validation/schemas";
@@ -72,6 +73,18 @@ export function buildRawSignalInput(fields: QuickCaptureFields): Record<string, 
   const note = fields.note.trim();
   if (note) input.note = note;
   return input;
+}
+
+/**
+ * task-39 Phase 2: AI 下書きを使って捉えた一次観測を、**直接保存せず** origin=ai で quarantine へ
+ * 送るための RawSignal 下書き配列を作る（§11.2 draft→人間 accept）。必須（sourceType / rawText）が
+ * 未充足なら null（導線を実行不可にする）。来歴 origin は投入側（quarantine intake）が "ai" に固定する。
+ */
+export function buildQuarantineDraftsFromFields(
+  fields: QuickCaptureFields,
+): Record<string, unknown>[] | null {
+  if (!fields.rawText.trim() || !fields.sourceType) return null;
+  return [buildRawSignalInput(fields)];
 }
 
 /**
@@ -287,6 +300,48 @@ export function QuickCapture({ onSaved }: QuickCaptureProps) {
           </label>
         </div>
       ) : null}
+
+      {/* task-39: AI 下書き（正規化フィールドの提案）。rawText を元に候補フィールド案を提示するだけで
+          自動反映はしない（人間が確認して手動入力・§11.2 draft→accept）。スコア/stage は提案しない。 */}
+      <AiDraftPanel
+        action="normalize-draft"
+        label="AI下書き（正規化フィールド）"
+        buildBody={() => {
+          const rawText = fields.rawText.trim();
+          if (!rawText) return null;
+          return {
+            rawText,
+            sourceType: fields.sourceType || undefined,
+            observedEntity: fields.observedEntity.trim() || undefined,
+          };
+        }}
+        renderProposed={(proposed) => {
+          const p = proposed as {
+            title?: string;
+            targetUser?: string;
+            painStatement?: string;
+            currentSubstitute?: string;
+          };
+          return (
+            <dl style={{ margin: 0, display: "grid", gap: 4 }}>
+              <div>
+                <strong>タイトル</strong>: {p.title || "—"}
+              </div>
+              <div>
+                <strong>対象ユーザー</strong>: {p.targetUser || "—"}
+              </div>
+              <div>
+                <strong>課題</strong>: {p.painStatement || "—"}
+              </div>
+              <div>
+                <strong>現代替手段</strong>: {p.currentSubstitute || "—"}
+              </div>
+            </dl>
+          );
+        }}
+        // AI 下書きを使ったこの観測を origin=ai で quarantine へ送る（人間 accept で初めて本登録）。
+        buildQuarantineDrafts={() => buildQuarantineDraftsFromFields(fields)}
+      />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
         <Button type="submit" variant="primary" disabled={submitting}>

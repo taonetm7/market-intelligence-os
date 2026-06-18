@@ -251,6 +251,12 @@ export async function split(args: SplitArgs, db: CandidateMergeDb = prisma): Pro
         nextAction: source.nextAction,
         rejectedReason: source.rejectedReason,
         rejectedReasonCode: source.rejectedReasonCode,
+        // split は元候補の「現在の状態」を忠実に複製する（stage / rejectedReason / rejectedReasonCode を
+        // そのまま継承）。棄却済み候補を split した子は同じ棄却状態を引き継ぐので、棄却時刻 rejectedAt も
+        // 併せて複製する（改善①）。reason/Code は継承するのに rejectedAt だけ落とすと、子が「理由コードを
+        // 持つのに rejectedAt=null」という不整合状態になり、週次レポートの期間絞り（rejectedAt 基準）から
+        // 不当に漏れる。3 フィールドを一体で継承して棄却状態の整合を保つ。
+        rejectedAt: source.rejectedAt,
         origin: source.origin,
       },
     });

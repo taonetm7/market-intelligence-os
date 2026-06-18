@@ -1,0 +1,30 @@
+# ローカル Postgres（task-40, spec v2 §6.3 / §18.7）。
+#
+# SQLite→Postgres 移行を試す / Postgres で動かすための開発用 DB。**任意**であり、ローカル利用が
+# 続くなら起動不要（既定は SQLite のまま）。手順は docs/postgres-migration.md。
+#
+#   起動:  docker compose up -d
+#   接続:  postgresql://mi:mi@localhost:5432/market_intel?schema=public
+#   停止:  docker compose down            （データは volume に残る）
+#   破棄:  docker compose down -v          （volume ごと削除）
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: market-intel-postgres
+    environment:
+      POSTGRES_USER: mi
+      POSTGRES_PASSWORD: mi
+      POSTGRES_DB: market_intel
+    ports:
+      - "5432:5432"
+    volumes:
+      - mi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mi -d market_intel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mi_pgdata:

@@ -3,11 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   buildWeeklyReport,
   rejectedDistribution,
+  selectRejected,
+  selectWatchlistChanges,
   splitMovements,
   weeklyReportRange,
+  type RejectedEntry,
   type ScoreMovement,
+  type WatchlistChange,
   type WeeklyReportData,
 } from "../../lib/report/weekly";
+
+// 期間の代表時刻。emptyData の since(06-11)〜until(06-18) の内/外で使う。
+const IN_PERIOD = new Date("2026-06-15T00:00:00.000Z");
+const BEFORE_PERIOD = new Date("2026-06-01T00:00:00.000Z");
 
 // task-38 — Weekly Report 生成（純粋関数）の単体テスト（spec v2 §9.9）。
 // I/O を持たない buildWeeklyReport / 補助関数を直接駆動し、各セクションの生成を検証する。
@@ -54,12 +62,21 @@ describe("splitMovements", () => {
   });
 });
 
+/** RejectedEntry を簡潔に作るヘルパ（rejectedAt 既定は期間内）。 */
+function rej(
+  displayId: string,
+  reasonCode: string | null,
+  rejectedAt: Date = IN_PERIOD,
+): RejectedEntry {
+  return { displayId, title: displayId, reasonCode, rejectedAt };
+}
+
 describe("rejectedDistribution", () => {
   it("理由コードを enum 順に集計し、件数 0 のコードは落とす", () => {
     const dist = rejectedDistribution([
-      { displayId: "CND-1", title: "a", reasonCode: "free_only" },
-      { displayId: "CND-2", title: "b", reasonCode: "no_purchaser" },
-      { displayId: "CND-3", title: "c", reasonCode: "no_purchaser" },
+      rej("CND-1", "free_only"),
+      rej("CND-2", "no_purchaser"),
+      rej("CND-3", "no_purchaser"),
     ]);
     // enum 順（no_purchaser が free_only より前）。
     expect(dist.map((d) => d.code)).toEqual(["no_purchaser", "free_only"]);
@@ -67,11 +84,67 @@ describe("rejectedDistribution", () => {
   });
 
   it("コード未設定（null）は末尾に「（コード未設定）」としてまとめる", () => {
-    const dist = rejectedDistribution([
-      { displayId: "CND-1", title: "a", reasonCode: null },
-      { displayId: "CND-2", title: "b", reasonCode: "low_pain" },
-    ]);
+    const dist = rejectedDistribution([rej("CND-1", null), rej("CND-2", "low_pain")]);
     expect(dist[dist.length - 1]).toEqual({ code: "uncoded", label: "（コード未設定）", count: 1 });
+  });
+});
+
+describe("selectRejected（指摘①: 期間内棄却の絞り込み）", () => {
+  const since = new Date("2026-06-11T00:00:00.000Z");
+  const until = new Date("2026-06-18T00:00:00.000Z");
+
+  it("rejectedAt が期間内の棄却だけを残す", () => {
+    const picked = selectRejected(
+      [
+        rej("CND-IN", "no_purchaser", IN_PERIOD),
+        rej("CND-OLD", "free_only", BEFORE_PERIOD),
+      ],
+      since,
+      until,
+    );
+    expect(picked.map((r) => r.displayId)).toEqual(["CND-IN"]);
+  });
+
+  it("rejectedAt が null（時刻不明）は期間外として除外する", () => {
+    const picked = selectRejected(
+      [{ displayId: "CND-X", title: "x", reasonCode: "low_pain", rejectedAt: null }],
+      since,
+      until,
+    );
+    expect(picked).toEqual([]);
+  });
+});
+
+describe("selectWatchlistChanges（指摘②: 期間内に動いた市場の絞り込み）", () => {
+  const since = new Date("2026-06-11T00:00:00.000Z");
+  const until = new Date("2026-06-18T00:00:00.000Z");
+
+  function wl(overrides: Partial<WatchlistChange>): WatchlistChange {
+    return {
+      entityType: "ranking",
+      entityName: "x",
+      metricName: null,
+      lastValue: "5",
+      currentValue: "3",
+      deltaFlag: "up",
+      lastCheckedAt: IN_PERIOD,
+      ...overrides,
+    };
+  }
+
+  it("deltaFlag up/down かつ lastCheckedAt 期間内のものだけ残す", () => {
+    const picked = selectWatchlistChanges(
+      [
+        wl({ entityName: "今週up", deltaFlag: "up", lastCheckedAt: IN_PERIOD }),
+        wl({ entityName: "今週down", deltaFlag: "down", lastCheckedAt: IN_PERIOD }),
+        wl({ entityName: "横ばい", deltaFlag: "unchanged", lastCheckedAt: IN_PERIOD }),
+        wl({ entityName: "先週up", deltaFlag: "up", lastCheckedAt: BEFORE_PERIOD }),
+        wl({ entityName: "未記録", deltaFlag: "up", lastCheckedAt: null }),
+      ],
+      since,
+      until,
+    );
+    expect(picked.map((w) => w.entityName)).toEqual(["今週up", "今週down"]);
   });
 });
 
@@ -107,19 +180,29 @@ describe("buildWeeklyReport", () => {
     expect(md).toContain("- CND-2 予約管理: 4.0 → 2.0（-2.0）");
   });
 
-  it("棄却理由コードの分布を合計件数つきで出す", () => {
+  it("棄却理由コードの分布を期間内棄却の合計件数つきで出す（期間外は数えない）", () => {
     const md = buildWeeklyReport(
       emptyData({
         rejected: [
-          { displayId: "CND-1", title: "a", reasonCode: "no_purchaser" },
-          { displayId: "CND-2", title: "b", reasonCode: "no_purchaser" },
-          { displayId: "CND-3", title: "c", reasonCode: "legal_risk" },
+          rej("CND-1", "no_purchaser", IN_PERIOD),
+          rej("CND-2", "no_purchaser", IN_PERIOD),
+          rej("CND-3", "legal_risk", IN_PERIOD),
+          rej("CND-OLD", "free_only", BEFORE_PERIOD), // 期間外 → 集計対象外
         ],
       }),
     );
     expect(md).toContain("## 棄却（理由コード分布・合計 3 件）");
     expect(md).toContain("- 購入者が不在（no_purchaser）: 2 件");
     expect(md).toContain("- 法務リスク（legal_risk）: 1 件");
+    // 期間外の棄却（free_only）は出ない。
+    expect(md).not.toContain("free_only");
+  });
+
+  it("期間内棄却が無ければ棄却セクションは空メッセージ（期間外だけのとき）", () => {
+    const md = buildWeeklyReport(
+      emptyData({ rejected: [rej("CND-OLD", "free_only", BEFORE_PERIOD)] }),
+    );
+    expect(md).toContain("## 棄却（理由コード分布）\nこの期間の棄却はありません。");
   });
 
   it("今週追加 Raw Signal を displayId・sourceType・対象つきで出し、長文は抜粋する", () => {
@@ -155,7 +238,7 @@ describe("buildWeeklyReport", () => {
     expect(md).toContain("- CND-4 検証D");
   });
 
-  it("来週見る市場は Watchlist 差分を entityType / deltaFlag ラベルつきで出す", () => {
+  it("来週見る市場は今週動いた Watchlist 差分だけを entityType / deltaFlag ラベルつきで出す", () => {
     const md = buildWeeklyReport(
       emptyData({
         watchlistChanges: [
@@ -166,11 +249,23 @@ describe("buildWeeklyReport", () => {
             lastValue: "5",
             currentValue: "3",
             deltaFlag: "up",
+            lastCheckedAt: IN_PERIOD,
+          },
+          {
+            entityType: "ranking",
+            entityName: "先週動いたきり",
+            metricName: "順位",
+            lastValue: "9",
+            currentValue: "2",
+            deltaFlag: "up",
+            lastCheckedAt: BEFORE_PERIOD, // 期間外 → 再掲しない
           },
         ],
       }),
     );
     expect(md).toContain("## 来週見る市場（Watchlist 差分）（1 件）");
     expect(md).toContain("- [ランキング] 総合ランキング: 順位 5 → 3（↑ 上昇）");
+    // 期間外（先週動いたきり）は毎週再掲しない（指摘②）。
+    expect(md).not.toContain("先週動いたきり");
   });
 });

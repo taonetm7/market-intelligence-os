@@ -20,6 +20,7 @@ import {
   DELTA_FLAG_VALUES,
   REJECTED_REASON_CODE_VALUES,
   WATCHLIST_ENTITY_TYPE_VALUES,
+  deltaFlagSchema,
   type DeltaFlag,
   type RejectedReasonCode,
   type WatchlistEntityType,
@@ -78,9 +79,15 @@ export interface ScoreMovement extends ReportCandidateRef {
   delta: number;
 }
 
-/** 棄却 1 件（理由コードは未設定があり得る＝自由文のみで棄却した場合）。 */
+/**
+ * 棄却 1 件（理由コードは未設定があり得る＝自由文のみで棄却した場合）。
+ * rejectedAt は「いつ棄却されたか」の時刻。Candidate には専用の rejectedAt が無いため route は
+ * updatedAt を渡す（reject() が更新時刻を棄却時刻に進めるための近似。task-38 phase2: 棄却は
+ * DecisionLog に残らないので、期間絞りはこの時刻で行う）。null は期間外として扱う。
+ */
 export interface RejectedEntry extends ReportCandidateRef {
   reasonCode: string | null;
+  rejectedAt: Date | null;
 }
 
 /** 今週追加された Raw Signal 1 件。 */
@@ -91,7 +98,11 @@ export interface NewRawSignalEntry {
   summary: string;
 }
 
-/** Watchlist の差分 1 件（来週見る市場）。 */
+/**
+ * Watchlist の差分 1 件（来週見る市場）。
+ * lastCheckedAt は最後に値を記録した時刻（task-36 updateValue が設定）。期間絞り（since 以降に
+ * 実際に動いたものだけ出す）に使う。null は未記録＝期間外として扱う。
+ */
 export interface WatchlistChange {
   entityType: string;
   entityName: string;
@@ -99,6 +110,7 @@ export interface WatchlistChange {
   lastValue: string | null;
   currentValue: string | null;
   deltaFlag: string;
+  lastCheckedAt: Date | null;
 }
 
 /**
@@ -145,6 +157,11 @@ function refLine(ref: ReportCandidateRef): string {
   return `- ${ref.displayId} ${ref.title}`;
 }
 
+/** at が [since, until] に入るか（null は期間外）。 */
+function withinPeriod(at: Date | null, since: Date, until: Date): boolean {
+  return at !== null && at >= since && at <= until;
+}
+
 /**
  * セクションを組み立てる。行があれば見出し＋件数＋箇条書き、無ければ見出し＋空メッセージ。
  * 見出しには件数を併記する（行がある場合のみ）。
@@ -183,6 +200,21 @@ function movementLine(m: ScoreMovement): string {
 }
 
 /**
+ * 期間内に棄却された候補だけを残す（task-38 phase2 指摘①対応）。
+ * 棄却は DecisionLog に残らないため、rejectedAt（route は Candidate.updatedAt を渡す）で期間絞りする。
+ * これは近似で、棄却後に当該候補を編集すると updatedAt が動いて期間判定がずれ得る点に注意
+ * （単一ローカルユーザーで棄却済み候補を編集することは稀との前提。正確な rejectedAt は task-38
+ * スコープ外＝Candidate モデル/DecisionLog 拡張が必要）。
+ */
+export function selectRejected(
+  entries: RejectedEntry[],
+  since: Date,
+  until: Date,
+): RejectedEntry[] {
+  return entries.filter((e) => withinPeriod(e.rejectedAt, since, until));
+}
+
+/**
  * 棄却理由コードの分布を集計する（§15.1）。enum 値タプルを巡回して安定順に並べ、件数 0 のコードは
  * 落とす。コード未設定（自由文のみの棄却）は末尾に「（コード未設定）」としてまとめる。
  */
@@ -209,6 +241,22 @@ export function rejectedDistribution(
     rows.push({ code: "uncoded", label: "（コード未設定）", count: noCode });
   }
   return rows;
+}
+
+/**
+ * 来週見る市場に出す Watchlist 差分を選ぶ（task-38 phase2 指摘②対応）。
+ * (1) deltaFlag が up/down（動いた）かつ (2) lastCheckedAt が期間内（since 以降に実際に記録された）
+ * ものだけを残す。これにより、過去に動いたきり放置のエントリを毎週そのまま再掲しない。
+ */
+export function selectWatchlistChanges(
+  items: WatchlistChange[],
+  since: Date,
+  until: Date,
+): WatchlistChange[] {
+  const movers = new Set<string>([deltaFlagSchema.enum.up, deltaFlagSchema.enum.down]);
+  return items.filter(
+    (w) => movers.has(w.deltaFlag) && withinPeriod(w.lastCheckedAt, since, until),
+  );
 }
 
 function watchlistLine(w: WatchlistChange): string {
@@ -246,13 +294,16 @@ export function weeklyReportRange(until: Date): { since: Date; until: Date } {
  */
 export function buildWeeklyReport(data: WeeklyReportData): string {
   const { up, down } = splitMovements(data.scoreMovements);
-  const distribution = rejectedDistribution(data.rejected);
+  // 棄却・Watchlist 差分は期間内のものだけに絞ってから集計/描画する（phase2 指摘①②）。
+  const periodRejected = selectRejected(data.rejected, data.since, data.until);
+  const distribution = rejectedDistribution(periodRejected);
+  const watchlistChanges = selectWatchlistChanges(data.watchlistChanges, data.since, data.until);
 
   const distributionBlock =
     distribution.length === 0
       ? "## 棄却（理由コード分布）\nこの期間の棄却はありません。"
       : [
-          `## 棄却（理由コード分布・合計 ${data.rejected.length} 件）`,
+          `## 棄却（理由コード分布・合計 ${periodRejected.length} 件）`,
           ...distribution.map((d) => `- ${d.label}（${d.code}）: ${d.count} 件`),
         ].join("\n");
 
@@ -288,7 +339,7 @@ export function buildWeeklyReport(data: WeeklyReportData): string {
     "",
     section(
       "来週見る市場（Watchlist 差分）",
-      data.watchlistChanges.map(watchlistLine),
+      watchlistChanges.map(watchlistLine),
       "差分のある観測対象はありません。",
     ),
     "",

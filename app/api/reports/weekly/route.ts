@@ -28,7 +28,7 @@ import { decisionLogRepo } from "../../../../lib/db/decisionLogRepo";
 import { rawSignalRepo } from "../../../../lib/db/rawSignalRepo";
 import { snapshotRepo } from "../../../../lib/db/snapshotRepo";
 import { watchlistRepo } from "../../../../lib/db/watchlistRepo";
-import { decisionTypeSchema, deltaFlagSchema, stageSchema } from "../../../../lib/validation/enums";
+import { stageSchema } from "../../../../lib/validation/enums";
 import {
   buildWeeklyReport,
   weeklyReportRange,
@@ -91,7 +91,6 @@ export async function GET(request: Request): Promise<Response> {
 
     const scoreMovements: ScoreMovement[] = [];
     const enteredTop100: WeeklyReportData["enteredTop100"] = [];
-    const rejected: WeeklyReportData["rejected"] = [];
 
     for (const c of candidates) {
       const ref = { displayId: c.displayId, title: c.title };
@@ -101,16 +100,25 @@ export async function GET(request: Request): Promise<Response> {
       const picked = pickScore(wd);
       if (picked) scoreMovements.push({ ...ref, ...picked });
 
-      // 期間内の判断ログから Top100 入り / 棄却を拾う。
+      // Top100 入りは promote 判断（DecisionLog に残る・task-29）から拾う。期間は decidedAt で絞る。
       const logs = await decisionLogRepo.listByCandidate(c.id);
-      const periodLogs = logs.filter((l) => inPeriod(l.decidedAt));
-      if (periodLogs.some((l) => l.toStage === stageSchema.enum.top100)) {
+      if (logs.some((l) => inPeriod(l.decidedAt) && l.toStage === stageSchema.enum.top100)) {
         enteredTop100.push(ref);
       }
-      if (periodLogs.some((l) => l.decisionType === decisionTypeSchema.enum.reject)) {
-        rejected.push({ ...ref, reasonCode: c.rejectedReasonCode });
-      }
     }
+
+    // 棄却（理由コード分布・§15.1）。phase2 指摘①: 通常の棄却は DecisionLog に残らない
+    // （candidateRepo.reject は Candidate を更新するだけ）ため、判断ログからは拾えない。
+    // stage==='rejected' かつ rejectedReasonCode を持つ候補を集計対象とし、期間絞りは weekly.ts 側で
+    // rejectedAt（= updatedAt 近似）に対して行う（正確な rejectedAt は task-38 スコープ外）。
+    const rejected: WeeklyReportData["rejected"] = candidates
+      .filter((c) => c.stage === stageSchema.enum.rejected && c.rejectedReasonCode !== null)
+      .map((c) => ({
+        displayId: c.displayId,
+        title: c.title,
+        reasonCode: c.rejectedReasonCode,
+        rejectedAt: c.updatedAt,
+      }));
 
     // stage ベースのセクション。
     const activeStages = new Set<string>([stageSchema.enum.rejected, stageSchema.enum.archived]);
@@ -138,19 +146,19 @@ export async function GET(request: Request): Promise<Response> {
         summary: r.rawText,
       }));
 
-    // 来週見る市場（Watchlist の差分があるもの）。
+    // 来週見る市場（Watchlist の差分）。deltaFlag up/down かつ期間内に記録されたものへの絞り込みは
+    // weekly.ts の selectWatchlistChanges が担う（phase2 指摘②: 古い up/down の毎週再掲を防ぐ）。
+    // ここは lastCheckedAt を含む全件を渡す。
     const watchlist = await watchlistRepo.list();
-    const movers = new Set<string>([deltaFlagSchema.enum.up, deltaFlagSchema.enum.down]);
-    const watchlistChanges: WatchlistChange[] = watchlist
-      .filter((w) => movers.has(w.deltaFlag))
-      .map((w) => ({
-        entityType: w.entityType,
-        entityName: w.entityName,
-        metricName: w.metricName,
-        lastValue: w.lastValue,
-        currentValue: w.currentValue,
-        deltaFlag: w.deltaFlag,
-      }));
+    const watchlistChanges: WatchlistChange[] = watchlist.map((w) => ({
+      entityType: w.entityType,
+      entityName: w.entityName,
+      metricName: w.metricName,
+      lastValue: w.lastValue,
+      currentValue: w.currentValue,
+      deltaFlag: w.deltaFlag,
+      lastCheckedAt: w.lastCheckedAt,
+    }));
 
     const markdown = buildWeeklyReport({
       since,

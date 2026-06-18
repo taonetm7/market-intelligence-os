@@ -81,9 +81,10 @@ export interface ScoreMovement extends ReportCandidateRef {
 
 /**
  * 棄却 1 件（理由コードは未設定があり得る＝自由文のみで棄却した場合）。
- * rejectedAt は「いつ棄却されたか」の時刻。Candidate には専用の rejectedAt が無いため route は
- * updatedAt を渡す（reject() が更新時刻を棄却時刻に進めるための近似。task-38 phase2: 棄却は
- * DecisionLog に残らないので、期間絞りはこの時刻で行う）。null は期間外として扱う。
+ * rejectedAt は「いつ棄却されたか」の時刻。改善①で Candidate に専用フィールド rejectedAt を追加し
+ * （reject() が現在時刻を記録）、route はそれをそのまま渡す（旧来の updatedAt 近似を廃止）。
+ * これにより棄却後に当該候補を編集して updatedAt が動いても期間絞りはズレない。null は
+ * 「棄却時刻不明（移行前に棄却済みの旧データ）」＝期間外として扱う（最近の棄却に誤計上しない）。
  */
 export interface RejectedEntry extends ReportCandidateRef {
   reasonCode: string | null;
@@ -200,11 +201,11 @@ function movementLine(m: ScoreMovement): string {
 }
 
 /**
- * 期間内に棄却された候補だけを残す（task-38 phase2 指摘①対応）。
- * 棄却は DecisionLog に残らないため、rejectedAt（route は Candidate.updatedAt を渡す）で期間絞りする。
- * これは近似で、棄却後に当該候補を編集すると updatedAt が動いて期間判定がずれ得る点に注意
- * （単一ローカルユーザーで棄却済み候補を編集することは稀との前提。正確な rejectedAt は task-38
- * スコープ外＝Candidate モデル/DecisionLog 拡張が必要）。
+ * 期間内に棄却された候補だけを残す（task-38 phase2 指摘① → 改善①で厳密化）。
+ * 棄却は DecisionLog に残らないため、Candidate の専用フィールド rejectedAt（reject() が記録）で
+ * 期間絞りする。改善①以前は updatedAt 近似で、棄却後に当該候補を編集すると updatedAt が動いて
+ * 期間判定がズレ得たが、rejectedAt は棄却時刻に固定されるためこのズレは解消した。
+ * rejectedAt が null（移行前に棄却済みの旧データ＝時刻不明）は期間外として除外する。
  */
 export function selectRejected(
   entries: RejectedEntry[],

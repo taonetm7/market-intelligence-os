@@ -290,4 +290,28 @@ describe("candidateMerge.split", () => {
     const created = await candidateRepo.getById(result.newCandidateId, db);
     expect(created!.title).toBe("継承元");
   });
+
+  // 改善① Phase2 指摘①: 棄却済み候補を split した子は棄却状態を引き継ぐ。reason/Code だけでなく
+  // 棄却時刻 rejectedAt も一体で継承し、「理由コードはあるが rejectedAt=null」の不整合を作らない。
+  it("inherits the full rejection state (stage / reason / code / rejectedAt) when splitting a rejected candidate", async () => {
+    const source = await candidateRepo.create(candidateFixture({ title: "棄却済み元" }), db);
+    const rejected = await candidateRepo.reject(
+      { id: source.id, rejectedReasonCode: "no_purchaser", rejectedReason: "誰も払わない" },
+      db,
+    );
+    expect(rejected.rejectedAt).toBeInstanceOf(Date);
+
+    const result = await candidateMerge.split(
+      { sourceId: source.id, evidenceIds: [], reason: "棄却状態のまま分割" },
+      db,
+    );
+
+    const created = await candidateRepo.getById(result.newCandidateId, db);
+    expect(created!.stage).toBe("rejected");
+    expect(created!.rejectedReasonCode).toBe("no_purchaser");
+    expect(created!.rejectedReason).toBe("誰も払わない");
+    // rejectedAt が落ちず、元候補の棄却時刻と一致する（暗黙の欠落ではなく明示的に継承）。
+    expect(created!.rejectedAt).not.toBeNull();
+    expect(created!.rejectedAt!.getTime()).toBe(rejected.rejectedAt!.getTime());
+  });
 });

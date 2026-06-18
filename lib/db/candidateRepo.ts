@@ -360,6 +360,15 @@ export async function promote(
 /**
  * 棄却する。`rejectedReasonCode`(enum) 必須・`stage='rejected'` に固定する（§15.1）。
  * コード無し（未指定や不正値）は Zod が弾く＝棄却できない。
+ *
+ * 棄却時刻 `rejectedAt` を現在時刻で記録する（改善①: 週次レポート §9.9 の棄却理由コード分布の
+ * 期間絞りを updatedAt 近似ではなく rejectedAt 厳密で行うため。棄却後に当該候補を編集して
+ * updatedAt が動いても、棄却時刻は不変＝期間判定がズレない）。
+ *
+ * 再 reject の方針: 既に rejected の候補を再度 reject した場合も rejectedAt を**その時点の現在時刻へ
+ * 更新**する（理由コードの付け替え＝最新の棄却判断時刻を採用する）。stage 変更で rejected から
+ * 抜けても rejectedAt は据え置く（rejectedReason / rejectedReasonCode と同じ流儀。週報は
+ * stage==='rejected' で絞るため、抜けた候補の残存 rejectedAt は集計に影響しない）。
  */
 export async function reject(
   input: CandidateReject,
@@ -372,6 +381,7 @@ export async function reject(
       stage: "rejected",
       rejectedReasonCode: data.rejectedReasonCode,
       rejectedReason: data.rejectedReason,
+      rejectedAt: new Date(),
     },
   });
   return decode(row);

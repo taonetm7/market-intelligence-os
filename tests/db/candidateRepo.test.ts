@@ -301,6 +301,59 @@ describe("candidateRepo.reject", () => {
       ),
     ).rejects.toThrow();
   });
+
+  // 改善①: 棄却時刻 rejectedAt を記録し、週次レポートの期間絞りを updatedAt 近似から厳密化する。
+  it("records rejectedAt on reject (null before)", async () => {
+    const created = await candidateRepo.create(inputFixture(), db);
+    // 棄却前は rejectedAt 未設定。
+    expect(created.rejectedAt).toBeNull();
+
+    const rejected = await candidateRepo.reject(
+      { id: created.id, rejectedReasonCode: "no_purchaser" },
+      db,
+    );
+    expect(rejected.rejectedAt).toBeInstanceOf(Date);
+
+    const fetched = await candidateRepo.getById(created.id, db);
+    expect(fetched?.rejectedAt).toBeInstanceOf(Date);
+  });
+
+  it("keeps rejectedAt fixed even after a later edit moves updatedAt (改善① 期間絞りの不変性)", async () => {
+    const created = await candidateRepo.create(inputFixture({ stage: "top30" }), db);
+    const rejected = await candidateRepo.reject(
+      { id: created.id, rejectedReasonCode: "low_pain" },
+      db,
+    );
+    const rejectedAt = rejected.rejectedAt!;
+    expect(rejectedAt).toBeInstanceOf(Date);
+
+    // 棄却後に編集すると updatedAt は動く。@updatedAt のミリ秒精度で差を出すため少し待つ。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const edited = await candidateRepo.update(created.id, { title: "棄却後に書き換えた" }, db);
+
+    // updatedAt は前進したが、rejectedAt は棄却時刻のまま不変（→ 期間絞りがズレない）。
+    expect(edited.updatedAt.getTime()).toBeGreaterThan(rejected.updatedAt.getTime());
+    expect(edited.rejectedAt?.getTime()).toBe(rejectedAt.getTime());
+  });
+
+  it("refreshes rejectedAt to the latest reject when re-rejected", async () => {
+    const created = await candidateRepo.create(inputFixture(), db);
+    const first = await candidateRepo.reject(
+      { id: created.id, rejectedReasonCode: "low_pain" },
+      db,
+    );
+    const firstRejectedAt = first.rejectedAt!;
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = await candidateRepo.reject(
+      { id: created.id, rejectedReasonCode: "free_only" },
+      db,
+    );
+
+    // 再 reject は理由コードを付け替え、rejectedAt を最新の棄却判断時刻へ更新する。
+    expect(second.rejectedReasonCode).toBe("free_only");
+    expect(second.rejectedAt!.getTime()).toBeGreaterThan(firstRejectedAt.getTime());
+  });
 });
 
 describe("candidateRepo.saveScores", () => {

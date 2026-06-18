@@ -110,14 +110,18 @@ export async function GET(request: Request): Promise<Response> {
     // 棄却（理由コード分布・§15.1）。phase2 指摘①: 通常の棄却は DecisionLog に残らない
     // （candidateRepo.reject は Candidate を更新するだけ）ため、判断ログからは拾えない。
     // stage==='rejected' かつ rejectedReasonCode を持つ候補を集計対象とし、期間絞りは weekly.ts 側で
-    // rejectedAt（= updatedAt 近似）に対して行う（正確な rejectedAt は task-38 スコープ外）。
+    // 専用フィールド rejectedAt に対して厳密に行う（改善①: 旧来の updatedAt 近似を廃止。棄却後に
+    // 当該候補を編集して updatedAt が動いても期間判定がズレない）。
+    // 旧データ（移行前に棄却済み＝rejectedAt が null）は期間外として除外する（selectRejected の
+    // null=期間外 セマンティクス）。正確な棄却時刻が無い旧棄却を「最近の棄却」に誤計上しない
+    // ＝ updatedAt フォールバックは行わない（それは是正したい近似バグの再導入になるため）。
     const rejected: WeeklyReportData["rejected"] = candidates
       .filter((c) => c.stage === stageSchema.enum.rejected && c.rejectedReasonCode !== null)
       .map((c) => ({
         displayId: c.displayId,
         title: c.title,
         reasonCode: c.rejectedReasonCode,
-        rejectedAt: c.updatedAt,
+        rejectedAt: c.rejectedAt,
       }));
 
     // stage ベースのセクション。

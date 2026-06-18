@@ -21,6 +21,13 @@ export const DEFAULT_AI_MODEL = "claude-opus-4-8";
 const ANTHROPIC_API_VERSION = "2023-06-01";
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
+/**
+ * Claude 呼び出しの明示タイムアウト（ms）。fetch は既定でハングし得るため、明示的に
+ * 打ち切って上流起因の失敗（AiRequestError→502）へ確実に倒す（Codex 指摘・再修正）。
+ * 軽量抽出（タグ候補/下書き）想定の妥当な既定として 30s。
+ */
+export const DEFAULT_AI_TIMEOUT_MS = 30_000;
+
 /** complete の入力。system プロンプトと user プロンプト、任意の max_tokens。 */
 export interface AiCompleteParams {
   system: string;
@@ -37,6 +44,8 @@ export interface AiClientDeps {
   model?: string;
   fetcher?: typeof fetch;
   baseUrl?: string;
+  /** 明示タイムアウト（ms）。未指定は DEFAULT_AI_TIMEOUT_MS。テストは短い値で発火を検証する。 */
+  timeoutMs?: number;
 }
 
 /** API キー未設定で AI 機能が無効なときに投げる明示エラー（route 側で握り潰す/無効応答に翻訳）。 */
@@ -86,6 +95,11 @@ export function createAiComplete(deps: AiClientDeps = {}): AiComplete {
     const fetcher = deps.fetcher ?? fetch;
     const model = deps.model ?? DEFAULT_AI_MODEL;
     const baseUrl = deps.baseUrl ?? DEFAULT_BASE_URL;
+    const timeoutMs = deps.timeoutMs ?? DEFAULT_AI_TIMEOUT_MS;
+
+    // fetch は既定でハングし得るため、明示タイムアウトで打ち切る。発火時は AbortError として
+    // reject され、下の catch で上流起因の AiRequestError(502) に倒す（timeout→500 にしない）。
+    const signal = AbortSignal.timeout(timeoutMs);
 
     // 通信失敗（タイムアウト / DNS / ネットワーク断）は上流（Claude 側）起因の失敗として扱う。
     // route はこれを 502 に翻訳する（呼び出し側の 500 にしない・指摘②）。
@@ -105,8 +119,13 @@ export function createAiComplete(deps: AiClientDeps = {}): AiComplete {
           system,
           messages: [{ role: "user", content: prompt }],
         }),
+        signal,
       });
-    } catch {
+    } catch (error) {
+      // タイムアウト発火（AbortError）は接続失敗と区別したメッセージにする（いずれも上流=502）。
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new AiRequestError(502, `Claude API がタイムアウトしました（${timeoutMs}ms 以内に応答なし）`);
+      }
       throw new AiRequestError(502, "Claude API への接続に失敗しました（通信エラー）");
     }
 

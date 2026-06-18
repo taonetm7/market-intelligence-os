@@ -116,6 +116,28 @@ describe("createAiComplete", () => {
       createAiComplete({ apiKey: "k", fetcher: brokenBody })({ system: "s", prompt: "p" }),
     ).rejects.toBeInstanceOf(AiRequestError);
   });
+
+  // Codex 再修正: fetch に明示タイムアウト（AbortSignal.timeout）を実装。発火時は AbortError 系の
+  // reject になり、上流起因の AiRequestError(=route で 502) に倒す（timeout→500 にしない）。
+  it("明示タイムアウト発火は 500 ではなく上流起因の AiRequestError(502) に倒す", async () => {
+    // signal の abort を尊重し時間内に解決しない fetcher。AbortSignal.timeout(timeoutMs) 発火で
+    // abort reason（TimeoutError）により reject され、実タイムアウト配線を実際に発火させる。
+    const hangingFetcher = ((_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => {
+          reject((init.signal as AbortSignal).reason);
+        });
+      })) as unknown as typeof fetch;
+
+    const error = await createAiComplete({
+      apiKey: "k",
+      fetcher: hangingFetcher,
+      timeoutMs: 10,
+    })({ system: "s", prompt: "p" }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiRequestError);
+    expect((error as AiRequestError).status).toBe(502);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -328,6 +350,16 @@ describe("POST /api/ai/[action]", () => {
           { status: 200 },
         ),
     );
+    const res = await post("tag-suggest", { text: "観測" });
+    expect(res.status).toBe(502);
+  });
+
+  // Codex 再修正: タイムアウト（AbortSignal.timeout の TimeoutError）も 500 でなく 502 へ倒す。
+  it("タイムアウト（TimeoutError）も 500 ではなく 502（上流エラー）で返す", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    vi.stubGlobal("fetch", async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    });
     const res = await post("tag-suggest", { text: "観測" });
     expect(res.status).toBe(502);
   });
